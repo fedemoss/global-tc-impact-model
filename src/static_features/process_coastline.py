@@ -4,76 +4,7 @@ from shapely.geometry import box
 import country_converter as coco
 from src.config import INPUT_DIR, OUTPUT_DIR
 
-# -------------------------------------------------------------------
-# Basin and Region Mapping
-# -------------------------------------------------------------------
-def add_basin_information(df):
-    """
-    Appends the UN Region, Continent, and Cyclone Basin based on the ISO3 country code.
-    """
-    if "iso3" not in df.columns:
-        raise ValueError("Dataframe must contain an 'iso3' column.")
 
-    unique_iso3 = df[["iso3"]].drop_duplicates().reset_index(drop=True)
-    
-    unique_iso3['continent'] = coco.convert(names=unique_iso3['iso3'], to='continent')
-    unique_iso3['region'] = coco.convert(names=unique_iso3['iso3'], to='UNregion')
-
-    un_region_to_basin = {
-        "Caribbean": "North Atlantic",
-        "Central America": "North Atlantic",
-        "South America": "North Atlantic",
-        "Northern America": "North Atlantic",
-        "Australia and New Zealand": "Australian Region",
-        "Southern Asia": "North Indian",
-        "Eastern Asia": "Western Pacific",
-        "South-eastern Asia": "Western Pacific",
-        "Western Asia": "North Indian",
-        "Eastern Africa": "South-West Indian",
-        "Southern Africa": "South-West Indian",
-        "Melanesia": "South Pacific",
-        "Micronesia": "Western Pacific",
-        "Polynesia": "South Pacific",
-        "Southern Europe": "Europe",
-    }
-    
-    unique_iso3["cyclone_basin"] = unique_iso3["region"].map(un_region_to_basin)
-    
-    return df.merge(unique_iso3, on="iso3", how="left")
-
-# -------------------------------------------------------------------
-# Impact Disaggregation
-# -------------------------------------------------------------------
-def calculate_grid_impact(df_events):
-    """
-    Disaggregates national or regional TC impact data to the grid level 
-    based on exposed population.
-    """
-    impact_data_grid = pd.DataFrame()
-    
-    for typhoon_id in df_events["DisNo."].unique():
-        df_event = df_events[df_events["DisNo."] == typhoon_id]
-        df_event_dmg_with_pop = df_event[
-            (df_event["population"] > 1) & (df_event["Total Affected"] != 0)
-        ].copy()
-        
-        if df_event_dmg_with_pop.empty:
-            continue
-
-        total_pop_reg = df_event_dmg_with_pop["population"].sum()
-
-        df_event_dmg_with_pop.loc[:, "perc_affected_pop_grid_region"] = (
-            100 * df_event_dmg_with_pop["Total Affected"] / total_pop_reg
-        )
-        
-        df_event_dmg_with_pop.loc[:, "perc_affected_pop_grid"] = (
-            100 * df_event_dmg_with_pop["population"] * df_event_dmg_with_pop["Total Affected"] / (total_pop_reg ** 2)
-        )
-        
-        df_event = df_event.merge(df_event_dmg_with_pop, how="left").fillna(0)
-        impact_data_grid = pd.concat([impact_data_grid, df_event])
-        
-    return impact_data_grid
 
 # -------------------------------------------------------------------
 # Coastline Distance and Length
@@ -138,7 +69,7 @@ def calculate_coastline_length(grid_path, coastline_path):
     
     return final_lengths
 
-def generate_coastal_features():
+def process_all_coastal():
     """Entry point to execute coastal feature generation."""
     grid_path = INPUT_DIR / "GRID" / "merged" / "global_grid_land_overlap.gpkg"
     coastline_path = INPUT_DIR / "SHP" / "ne_10m_coastline" / "ne_10m_coastline.shp"
@@ -159,4 +90,4 @@ def generate_coastal_features():
         print(f"Saved lengths to {len_out}")
 
 if __name__ == "__main__":
-    generate_coastal_features()
+    process_all_coastal()

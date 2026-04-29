@@ -48,18 +48,22 @@ def process_single_country_flood(iso, grid_global, tile_paths, out_dir):
 
     grid_country[["id", "iso3", "flood_risk"]].to_csv(out_path, index=False)
 
-if __name__ == "__main__":
+def process_all_flood():
     tile_dir = INPUT_DIR / "FloodRisk" / "tiles"
     tile_paths = [tile_dir / f for f in os.listdir(tile_dir) if f.endswith("_depth_reclass.tif")]
-    
+
     grid = gpd.read_file(INPUT_DIR / "GRID" / "merged" / "global_grid_land_overlap.gpkg")
     grid["iso3"] = grid["GID_0"]
-    
+
     out_dir = OUTPUT_DIR / "FloodRisk" / "grid_data"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     valid_iso3 = [iso for iso in ISO3_LIST if iso in grid.iso3.unique()]
-    
+
     with ThreadPoolExecutor(max_workers=4) as executor:
         for iso in valid_iso3:
             executor.submit(process_single_country_flood, iso, grid, tile_paths, out_dir)
+
+if __name__ == "__main__":
+    process_all_flood()
+

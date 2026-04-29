@@ -33,6 +33,7 @@ cloudpickle==3.0.0
 comm==0.1.2
 contextily==1.4.0
 contourpy==1.1.1
+country-converter==1.2
 cryptography==42.0.8
 cycler==0.12.1
 dask==2023.10.1

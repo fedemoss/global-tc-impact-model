@@ -24,15 +24,18 @@ def process_shdi_to_grid(iso, grid_global, shdi_df, out_dir):
 
     grid_country[["id", "iso3", "shdi"]].to_csv(out_path, index=False)
 
-if __name__ == "__main__":
+def process_all_shdi():
     shdi_file = INPUT_DIR / "SHDI" / "SHDI_Complete_v10.csv"
     if shdi_file.exists():
         shdi_df = pd.read_csv(shdi_file)
         grid = gpd.read_file(INPUT_DIR / "GRID" / "merged" / "global_grid_land_overlap.gpkg")
         grid["iso3"] = grid["GID_0"]
-        
+
         out_dir = OUTPUT_DIR / "SHDI" / "grid_data"
         out_dir.mkdir(parents=True, exist_ok=True)
 
         for iso in ISO3_LIST:
             process_shdi_to_grid(iso, grid, shdi_df, out_dir)
+
+if __name__ == "__main__":
+    process_all_shdi()

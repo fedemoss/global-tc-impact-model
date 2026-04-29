@@ -207,7 +207,7 @@ def iterate_srtm_data_extracting(grid, out_path, data_path, valid_iso_list):
 
     return srtm_data
 
-if __name__ == "__main__":
+def process_all_srtm():
     out_path = OUTPUT_DIR / "SRTM" / "grid_data"
     data_path = INPUT_DIR / "SRTM" / "tiles"
     out_path.mkdir(parents=True, exist_ok=True)
@@ -217,7 +217,10 @@ if __name__ == "__main__":
     grid["iso3"] = grid["GID_0"]
 
     valid_iso_list = [iso for iso in ISO3_LIST if iso in grid.iso3.unique()]
-    
+
     print(f"Processing SRTM data for {len(valid_iso_list)} countries...")
     srtm_data = iterate_srtm_data_extracting(grid, out_path, data_path, valid_iso_list)
     srtm_data.to_csv(out_path / "global_srtm_grid_data.csv", index=False)
+
+if __name__ == "__main__":
+    process_all_srtm()

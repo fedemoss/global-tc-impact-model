@@ -81,20 +81,23 @@ def process_storm_surge_risk(gdf, gdf_coastline, grid_cells, output_csv, R=0.5):
     storm_surges_complete_df.to_csv(output_csv, index=False)
     print(f"Storm surge risk data saved to: {output_csv}")
 
-if __name__ == "__main__":
+
+def process_all_surges():
     dataset = xr.open_dataset(INPUT_DIR / "StormSurges" / "storm_surges_data.nc")
     gdf = create_geodataframe_from_nc(dataset)
-    
+
     grid_cells = gpd.read_file(INPUT_DIR / "GRID" / "merged" / "global_grid_land_overlap.gpkg")
     grid_cells["geometry"] = grid_cells["geometry"].apply(adjust_longitude)
     grid_cells["GID_0"] = grid_cells["iso3"] if "iso3" in grid_cells.columns else grid_cells["GID_0"]
 
-    # Use the coastline feature created earlier in spatial_features.py
     df_coastline = pd.read_csv(OUTPUT_DIR / "features" / "coastline_length.csv")
     df_coastline = df_coastline[df_coastline.coast_length_meters > 0]
-    
+
     gdf_coastline = gpd.GeoDataFrame(df_coastline.merge(grid_cells, how="left"), geometry="geometry")[["id", "GID_0", "geometry"]]
     gdf_coastline["geometry"] = gdf_coastline["geometry"].apply(adjust_longitude)
 
     output_csv = OUTPUT_DIR / "StormSurges" / "grid_data" / "global_grid_storm_surges_risk.csv"
     process_storm_surge_risk(gdf, gdf_coastline, grid_cells, output_csv)
+
+if __name__ == "__main__":
+    process_all_surges()

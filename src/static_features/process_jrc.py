@@ -49,7 +49,7 @@ def calculate_urban_rural_water(grid, raster, out_dir, iso3, nodata_value=128):
     df_urban_rural.to_csv(file_path, index=False)
     print(f"Processed {iso3} and saved.")
 
-if __name__ == "__main__":
+def process_all_jrc():
     file_name = "GHS_SMOD_P2025_GLOBE_R2022A_54009_1000_V1_0.tif"
     src = rxr.open_rasterio(INPUT_DIR / "JRC" / file_name)
 
@@ -60,8 +60,12 @@ if __name__ == "__main__":
 
     out_dir = OUTPUT_DIR / "JRC" / "grid_data"
     out_dir.mkdir(parents=True, exist_ok=True)
-    
+
     valid_iso3_list = [iso for iso in ISO3_LIST if iso in grid_transformed.iso3.unique()]
 
     for iso3 in valid_iso3_list:
         calculate_urban_rural_water(grid_transformed[grid_transformed.iso3 == iso3], src_wgs84, out_dir, iso3)
+
+if __name__ == "__main__":
+    process_all_jrc()
+

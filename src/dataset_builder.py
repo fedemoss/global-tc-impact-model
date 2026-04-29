@@ -6,8 +6,8 @@ from src.config import INPUT_DIR, OUTPUT_DIR, ISO3_LIST
 def load_static_features(iso3):
     """Loads and merges all static spatial features for a specific country."""
     # 1. Spatial/Coastal Features - Note: aligned with refactored paths
-    coast_dist_path = OUTPUT_DIR / "dynamic_features" / "distance_to_coast.csv"
-    coast_len_path = OUTPUT_DIR / "dynamic_features" / "coastline_length.csv"
+    coast_dist_path = OUTPUT_DIR / "features" / "distance_to_coast.csv"
+    coast_len_path = OUTPUT_DIR / "features" / "coastline_length.csv"
     
     df_static = pd.read_csv(coast_dist_path) if coast_dist_path.exists() else pd.DataFrame()
     if coast_len_path.exists():

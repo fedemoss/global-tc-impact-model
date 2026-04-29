@@ -6,11 +6,14 @@ import concurrent.futures
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 from tqdm import tqdm
+
 from src.config import (
     INPUT_DIR, GADM_BASE_URL, WORLDPOP_URL, LANDSLIDE_URL, 
     STORM_SURGE_URL, JRC_SMOD_URL, SRTM_BASE_URL, FLOOD_RISK_URL,
     SHDI_URL, GAUL_ADM2_URL
 )
+
+from src.utils.region_matching import create_basin_dataset
 
 def download_file(url, out_path, stream=True, verify=True):
     """Generic download utility for large files and streaming."""
@@ -152,6 +155,14 @@ def collect_srtm():
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         list(tqdm(executor.map(download_and_extract, tile_names), total=len(tile_names)))
 
+def create_region_dataset():
+    df = create_basin_dataset()
+    out_dir = INPUT_DIR / "model_input_dataset"
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = out_dir / "un_regions.csv"
+    df.to_csv(out_path, index=False)
+
+
 def download_all_public_data():
     """Main orchestrator for collecting all public hazard and spatial data."""
     collect_gadm()
@@ -163,6 +174,9 @@ def download_all_public_data():
     collect_srtm()
     collect_flood_risk()
     collect_shdi()
+    # Create also a dataset with region information
+    create_region_dataset()
 
 if __name__ == "__main__":
     download_all_public_data()
+    

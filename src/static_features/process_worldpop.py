@@ -40,8 +40,8 @@ def process_country(iso, grid, raster, out_folder):
     except Exception as e:
         logging.error(f"Error processing {iso}: {e}")
         return f"Error processing {iso}."
-
-if __name__ == "__main__":
+    
+def process_all_worldpop():
     raster_path = INPUT_DIR / "Worldpop" / "ppp_2020_1km_Aggregated.tif"
     out_folder = OUTPUT_DIR / "Worldpop" / "grid_data"
     out_folder.mkdir(parents=True, exist_ok=True)
@@ -50,7 +50,6 @@ if __name__ == "__main__":
     grid["iso3"] = grid["GID_0"]
     grid["geometry"] = grid["geometry"].apply(adjust_longitude)
 
-    # Filter ISO3 list based on grid availability
     valid_iso3_list = [iso for iso in ISO3_LIST if iso in grid.iso3.unique()]
 
     with rasterio.open(raster_path) as pop_raster:
@@ -58,3 +57,6 @@ if __name__ == "__main__":
             futures = [executor.submit(process_country, iso, grid, pop_raster, out_folder) for iso in valid_iso3_list]
             for future in futures:
                 print(future.result())
+
+if __name__ == "__main__":
+    process_all_worldpop()

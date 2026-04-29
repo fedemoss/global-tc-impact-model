@@ -72,7 +72,7 @@ def create_past_events_feature(impact_data_path, grid_data_path):
     
     return final_historical_df
 
-def generate_historical_features():
+def generate_all_historical_features():
     """Entry point to execute historical feature generation."""
     impact_path = INPUT_DIR / "EMDAT" / "global_grid_impact_data.csv"
     grid_path = INPUT_DIR / "GRID" / "merged" / "global_grid_municipality_info.csv"
@@ -91,4 +91,4 @@ def generate_historical_features():
     print(f"Saved historical features to {out_file}")
 
 if __name__ == "__main__":
-    generate_historical_features()
+    generate_all_historical_features()

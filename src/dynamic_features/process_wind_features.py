@@ -82,22 +82,16 @@ def adjust_tracks(forecast_df, name="", custom_sid="", custom_idno=""):
     return track.set_coords(["lat", "lon"])
 
 def load_data():
-    """Load grid data and shapefiles using centralized configuration paths."""
-    grid_dir = INPUT_DIR / "GRID"
-    files = os.listdir(grid_dir)
-    gdf_list, gdf_all_list = [], []
+    """Load global grid data and shapefile """
+    grid_path = INPUT_DIR / "GRID" / "merged" / "global_grid_centroids.csv"
+    if not grid_path.exists():
+        raise FileNotFoundError(f"Centroid grid not found at {grid_path}")
     
-    for file in files:
-        if file.startswith("grid_land_overlap_centroids_"):
-            gdf_list.append(gpd.read_file(grid_dir / file))
-        elif file.startswith("grid_centroids_"):
-            gdf_all_list.append(gpd.read_file(grid_dir / file))
-            
-    gdf = gpd.GeoDataFrame(pd.concat(gdf_list, ignore_index=True), geometry="geometry") if gdf_list else pd.DataFrame()
-    gdf_all = gpd.GeoDataFrame(pd.concat(gdf_all_list, ignore_index=True), geometry="geometry") if gdf_all_list else pd.DataFrame()
+    gdf = pd.read_csv(grid_path)
+    gdf = gpd.GeoDataFrame(gdf, geometry=gpd.points_from_xy(gdf.Longitude, gdf.Latitude), crs="EPSG:4326")
     
     shp = gpd.read_file(INPUT_DIR / "SHP" / "global_shapefile_GID_adm2.gpkg")
-    return gdf, gdf_all, shp
+    return gdf, shp
 
 def load_impact_data():
     """Load and merge impact data with windspeed flags."""
@@ -193,31 +187,25 @@ def process_storm_tracks(tc_tracks):
         
     return tracks
 
-def process_single_country(iso3, out_dir, gdf_global, gdf_all_global, shp_global, all_events_global):
+def process_single_country(iso3, out_dir, gdf_global, shp_global, all_events_global):
     """Processes a single country's windfield and metadata data."""
-    if f"windfield_data_{iso3}.csv" in os.listdir(out_dir):
-        print(f"Dataset already created for {iso3}")
-        return None
+    out_file = out_dir / f"windfield_data_{iso3}.csv"
+    if out_file.exists(): return None
 
-    gdf = gdf_global[gdf_global.iso3 == iso3]
-    gdf_all = gdf_all_global[gdf_all_global.iso3 == iso3]
+    # Filter global grid to current country
+    gdf = gdf_global[gdf_global.iso3 == iso3].copy()
     cent = Centroids.from_geodataframe(gdf)
-    cent_all = Centroids.from_geodataframe(gdf_all)
     all_events = all_events_global[all_events_global.GID_0 == iso3]
 
     tc_tracks, problematic_sid = get_storm_tracks(all_events=all_events)
     tracks = process_storm_tracks(tc_tracks=tc_tracks)
 
-    tc_all = TropCyclone.from_tracks(tracks, centroids=cent_all, store_windfields=True, intensity_thres=0)
-    df_wind = windfield_to_grid(tc=tc_all, tracks=tracks, grids=gdf_all)
-    df_wind = df_wind[df_wind.grid_point_id.isin(gdf.id)]
+    # Calculate wind only for land centroids
+    tc = TropCyclone.from_tracks(tracks, centroids=cent, store_windfields=True, intensity_thres=0)
+    df_wind = windfield_to_grid(tc=tc, tracks=tracks, grids=gdf)
 
-    df_wind.to_csv(out_dir / f"windfield_data_{iso3}.csv", index=False)
-    missing = all_events[all_events.sid.isin(problematic_sid)]
-    missing.to_csv(out_dir / f"nodata_storms_{iso3}.csv", index=False)
-    
-    print(f"Dataset created for {iso3}")
-    return df_wind, problematic_sid
+    df_wind.to_csv(out_file, index=False)
+    return df_wind
 
 def generate_all_wind_features(max_workers=5):
     """Entry point to execute wind processing."""

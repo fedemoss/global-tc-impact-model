@@ -9,6 +9,11 @@ from src.config import INPUT_DIR, OUTPUT_DIR, ISO3_LIST
 # Configure logging for spatial processing
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
+
+# -------------------------------------------------------------------
+# Impact Disaggregation to the adm1 level
+# -------------------------------------------------------------------
+
 def clean_emdat(df):
     """Filters and cleans the raw EM-DAT dataset for tropical cyclones."""
     logging.info("Cleaning EM-DAT source data...")
@@ -114,13 +119,13 @@ def add_missing_sid(df):
     df["sid"] = df["sid"].fillna(df["DisNo."].map(manual_sid_map))
     return df.dropna(subset=["sid"]).reset_index(drop=True)
 
-def geolocate_impact_events():
+def preprocess_emdat_events():
     """Main function to clean, geolocate, and spatially expand the EM-DAT database."""
     # IO Paths from config
     emdat_path = INPUT_DIR / "EMDAT" / "emdat.csv"
     gadm_path = INPUT_DIR / "SHP" / "GADM_adm2.gpkg"
     guil_path = INPUT_DIR / "SHP" / "global_shapefile_GUIL_adm2.gpkg"
-    out_path = OUTPUT_DIR / "EMDAT" / "impact_data.csv"
+    out_path = OUTPUT_DIR / "EMDAT" / "impact_data_adm1_level.csv"
     os.makedirs(out_path.parent, exist_ok=True)
 
     # 1. Initialization
@@ -189,6 +194,8 @@ def geolocate_impact_events():
         merged = merged.sort_values(by="Total Affected", ascending=False)
         cols_to_fill = ["DisNo.", "sid", "Start Year", "Start Month", "Event Name", "level"]
         for col in cols_to_fill:
+            # Sort to put impacted rows at top before filling
+            merged = merged.sort_values(by="Total Affected", ascending=False)
             merged[col] = merged[col].ffill()
         
         merged["Total Affected"] = merged["Total Affected"].fillna(0)
@@ -200,5 +207,50 @@ def geolocate_impact_events():
     df_final.to_csv(out_path, index=False)
     logging.info(f"Master Impact Registry saved to {out_path}")
 
+# -------------------------------------------------------------------
+# Impact Disaggregation to the grid level
+# -------------------------------------------------------------------
+def calculate_grid_impact():
+    """
+    Disaggregates national or regional TC impact data to the grid level 
+    based on exposed population.
+    """
+    # Load processed EMDAT db
+    in_path = OUTPUT_DIR / "EMDAT" / "impact_data_adm1_level.csv"
+    out_path = OUTPUT_DIR / "EMDAT" / "impact_data.csv"
+    df_events = pd.read_csv(in_path)
+
+    impact_data_grid = pd.DataFrame()
+    for typhoon_id in df_events["DisNo."].unique():
+        df_event = df_events[df_events["DisNo."] == typhoon_id]
+        df_event_dmg_with_pop = df_event[
+            (df_event["population"] > 1) & (df_event["Total Affected"] != 0)
+        ].copy()
+        
+        if df_event_dmg_with_pop.empty:
+            continue
+
+        total_pop_reg = df_event_dmg_with_pop["population"].sum()
+
+        df_event_dmg_with_pop.loc[:, "perc_affected_pop_grid_region"] = (
+            100 * df_event_dmg_with_pop["Total Affected"] / total_pop_reg
+        )
+        
+        df_event_dmg_with_pop.loc[:, "perc_affected_pop_grid"] = (
+            100 * df_event_dmg_with_pop["population"] * df_event_dmg_with_pop["Total Affected"] / (total_pop_reg ** 2)
+        )
+        
+        df_event = df_event.merge(df_event_dmg_with_pop, how="left").fillna(0)
+        impact_data_grid = pd.concat([impact_data_grid, df_event])
+
+    impact_data_grid.to_csv(out_path, index=False)
+    logging.info(f"Master Gridded Impact Registry saved to {out_path}")
+
+def process_emdat_events():
+    """ Main pipeline """
+    preprocess_emdat_events()
+    calculate_grid_impact()
+    
+
 if __name__ == "__main__":
-    geolocate_impact_events()
+    process_emdat_events()

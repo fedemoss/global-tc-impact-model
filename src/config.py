@@ -22,7 +22,7 @@ SHDI_URL = "https://globaldatalab.org/shdi/download_files/"
 
 # FEATURES used in the final 2-stage XGBoost model
 FEATURES = [
-    "wind_speed", "rainfall_max_24h", "population", "coast_length", 
+    "wind_speed", "rainfall_max_24h", "population", "coast_length_meters", 
     "with_coast", "mean_elev", "mean_slope", "mean_rug", "urban", 
     "rural", "water", "storm_tide_rp_0010", "landslide_risk_sum", 
     "N_events_5_years"

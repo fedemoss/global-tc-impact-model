@@ -12,6 +12,7 @@ from src.static_features.grid_cells import main_grid_generation
 # Static Processors
 from src.static_features.process_worldpop import process_all_worldpop
 from src.static_features.process_srtm import process_all_srtm
+from src.static_features.process_coastline import process_all_coastal
 from src.static_features.process_jrc import process_all_jrc
 from src.static_features.process_landslide import process_all_landslide
 from src.static_features.process_storm_surges import process_all_surges
@@ -21,10 +22,9 @@ from src.static_features.process_gadm import process_gadm_adm2
 
 # Dynamic Processors
 from src.dynamic_features.process_emdat import process_emdat_events
-from src.dynamic_features.process_spatial import generate_all_spatial_features
-from src.dynamic_features.process_wind import generate_all_wind_features
-from src.dynamic_features.process_rain import generate_all_rain_features
-from src.dynamic_features.process_historical import generate_all_historical_features
+from src.dynamic_features.process_wind_features import generate_all_wind_features
+from src.dynamic_features.process_rain_features import generate_all_rain_features
+from src.dynamic_features.process_historical_features import generate_all_historical_features
 
 # Build & Model
 from src.dataset_builder import compile_global_dataset
@@ -70,6 +70,7 @@ def main():
             process_gadm_adm2()
             process_all_worldpop()
             process_all_srtm()
+            process_all_coastal()
             process_all_jrc()
             process_all_landslide()
             process_all_surges()
@@ -81,7 +82,6 @@ def main():
             # Anchor the dynamic processing to EM-DAT targets first
             process_emdat_events() 
             # Process hazards
-            generate_all_spatial_features()
             generate_all_wind_features()
             generate_all_rain_features()
             generate_all_historical_features()
@@ -93,7 +93,7 @@ def main():
     # --- OPTIONAL SCIENCE ---
     if args.run_models:
         logging.info("Science: Running 2-Stage XGBoost Model...")
-        execute_training_run("2-stage-XGBoost", strategy="global")
+        execute_training_run("2-stage-XGBoost", strategy="global", aggregate_to_adm1=True)
 
     if args.run_interpretability:
         logging.info("Science: Running SHAP Analysis...")

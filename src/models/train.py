@@ -9,7 +9,7 @@ def prepare_data(aggregate_to_adm1=False):
     """Loads dataset, applies subnational filters, and optionally aggregates to ADM1 non-grid level."""
     
     # Load core data
-    df = pd.read_parquet(INPUT_DIR / "model_input_dataset" / "training_dataset_standard_windspeed.parquet")
+    df = pd.read_parquet(INPUT_DIR / "model_input_dataset" / "training_dataset.parquet")
     df = df.drop_duplicates().reset_index(drop=True)
     
     # Merge region info
@@ -34,18 +34,18 @@ def prepare_data(aggregate_to_adm1=False):
 
     # Conditionally Aggregate to ADM1
     if aggregate_to_adm1:
-        agg_dict = {f: "mean" for f in FEATURES if f not in ["wind_speed", "rainfall_max_24h", "population"]}
+        # Features should be averaged or taken as max/sum depending on their nature
+        agg_dict = {f: "mean" for f in FEATURES if f not in ["wind_speed", "rainfall_max_24h", "population", "N_events_5_years"]}
         agg_dict.update({
             "wind_speed": "max",
             "rainfall_max_24h": "max",
             "population": "sum",
-            "perc_affected_pop_grid_region": "max",
+            "perc_affected_pop_grid_region": "max", # Keep the target as reported
             "Total Affected": "max",
+            "N_events_5_years": "max"
         })
-        if "N_events_5_years" in FEATURES:
-            agg_dict["N_events_5_years"] = "max"
-
-        df = df.groupby(["DisNo.", "sid", "level", "GID_0", "GID_1", "iso3", "cyclone_basin"]).agg(agg_dict).reset_index()
+        
+        df = df.groupby(["DisNo.", "sid", "level", "GID_0", "GID_1", "iso3", "cyclone_basin", "date"]).agg(agg_dict).reset_index()
 
     # Add Date Info
     emdat = pd.read_csv(INPUT_DIR / "EMDAT" / "emdat-tropicalcyclone-2000-2022-processed-sids.csv")

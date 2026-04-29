@@ -67,6 +67,8 @@ pip install -r requirements.txt
     * `Total Deaths`: Secondary target/tracking variable.
     * `Admin Units`: JSON-formatted string of affected administrative regions (used for spatial expansion).
 
+**Note: we leave to the user the "sid" and "Disno." matching of storms. This involves manual labeling based TC names, locations and dates on top of classic fuzzy-matching techniques or (alternatively) the use of LLM matching approaches.** 
+
 * **NASA PPS (Precipitation)**: To access GPM-IMERG rainfall data, register a free account at [NASA PPS](https://pps.gsfc.nasa.gov/). Once registered, configure your credentials in `src/collectors/pps_collector.py`.
 
 ---
@@ -144,4 +146,4 @@ Interpretability is provided via **SHAP (SHapley Additive exPlanations)**. This 
 ## 🎓 Citation
 
 If you use this repository or the generated dataset in your research, please cite:
-> *Moss, F et al. (2026). Global Sub-national Impact-based Forecasting for Tropical Cyclones Using Open Data: Combining Machine Learning and Exposure-based Approaches. (under review).*
+> *Moss, F et al. Global Sub-national Impact-based Forecasting for Tropical Cyclones Using Open Data: Combining Machine Learning and Exposure-based Approaches, EGUsphere (2026). doi: 10.5194/egusphere-2026-1996 (under review).*
