@@ -32,7 +32,7 @@ The core of this project is the **Data Factory**, which automates the collection
 
 ### 1. System Dependencies
 The pipeline relies on several low-level geospatial libraries for raster processing and atmospheric data handling:
-* **Python 3.10+**: The core environment.
+* **Python 3.10-3.12**: The core environment.
 * **GDAL (Geospatial Data Abstraction Library)**: Required for processing SRTM elevation data and JRC urbanization rasters (specifically `gdaldem`).
 
 
