@@ -4,26 +4,17 @@ from pathlib import Path
 from src.config import INPUT_DIR, OUTPUT_DIR, ISO3_LIST
 
 def load_static_features(iso3):
-    """Loads and merges all static spatial features for a specific country."""
-    # 1. Spatial/Coastal Features - Note: aligned with refactored paths
-    coast_dist_path = OUTPUT_DIR / "features" / "distance_to_coast.csv"
-    coast_len_path = OUTPUT_DIR / "features" / "coastline_length.csv"
-    
-    df_static = pd.read_csv(coast_dist_path) if coast_dist_path.exists() else pd.DataFrame()
-    if coast_len_path.exists():
-        df_len = pd.read_csv(coast_len_path)
-        if not df_static.empty:
-            df_static = df_static.merge(df_len, on=["id", "iso3"], how="outer")
-        else:
-            df_static = df_len
+    """
+    Loads and merges all static spatial features for a specific country.
 
-    if df_static.empty: return pd.DataFrame()
-    df_static = df_static[df_static["iso3"] == iso3]
+    """
+    df_static = pd.DataFrame()
 
-    # 2. Gridded Static Layers (Population, Terrain, Urbanization, Hazard Risks)
+    # 1. Gridded Static Layers
+    # The SRTM dataset contains elevation, slope, ruggedness, and coastal features.
     layers = {
-        "Worldpop": f"population_grid_{iso3}.csv",
         "SRTM": f"srtm_grid_data_{iso3}.csv",
+        "Worldpop": f"population_grid_{iso3}.csv",
         "JRC": f"degree_of_urbanization_{iso3}.csv",
         "FloodRisk": f"flood_risk_{iso3}.csv",
         "SHDI": f"shdi_grid_{iso3}.csv"
@@ -32,20 +23,41 @@ def load_static_features(iso3):
     for folder, file in layers.items():
         path = OUTPUT_DIR / folder / "grid_data" / file
         if path.exists():
-            df_static = df_static.merge(pd.read_csv(path), on=["id", "iso3"], how="left")
+            layer_df = pd.read_csv(path)
+            
+            if df_static.empty:
+                df_static = layer_df
+            else:
+                # Merge on the unique grid identifier and country ISO code
+                df_static = df_static.merge(layer_df, on=["id", "iso3"], how="left")
 
-    # 3. Global Static Layers
+    if df_static.empty:
+        return pd.DataFrame()
+
+    # 2. Global Static Layers
+    # Landslide Risk
     landslide_path = OUTPUT_DIR / "LandSlides" / "global_grid_landslide_risk.csv"
     if landslide_path.exists():
         df_land = pd.read_csv(landslide_path)
-        df_static = df_static.merge(df_land[df_land.iso3 == iso3], on=["id", "iso3"], how="left")
+        # Filter global data to the specific country during merge
+        df_static = df_static.merge(
+            df_land[df_land.iso3 == iso3], 
+            on=["id", "iso3"], 
+            how="left"
+        )
 
+    # Storm Surge Risk
     surge_path = OUTPUT_DIR / "StormSurges" / "grid_data" / "global_grid_storm_surges_risk.csv"
     if surge_path.exists():
         df_surge = pd.read_csv(surge_path).rename(columns={"GID_0": "iso3"})
-        df_static = df_static.merge(df_surge[df_surge.iso3 == iso3], on=["id", "iso3"], how="left")
+        df_static = df_static.merge(
+            df_surge[df_surge.iso3 == iso3], 
+            on=["id", "iso3"], 
+            how="left"
+        )
 
     return df_static
+
 
 def build_country_dataset(iso3, df_meta, df_impact_master):
     """

@@ -13,7 +13,6 @@ from src.config import (
     SHDI_URL, GAUL_ADM2_URL
 )
 
-from src.utils.region_matching import create_basin_dataset
 
 def download_file(url, out_path, stream=True, verify=True):
     """Generic download utility for large files and streaming."""
@@ -33,14 +32,20 @@ def download_file(url, out_path, stream=True, verify=True):
             out_path.unlink()
         return False
 
+import zipfile
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+
 def collect_gadm():
-    """Scrapes gadm.org for the latest global geodatabase and downloads it."""
+    """Scrapes gadm.org for the latest global geodatabase, downloads, and unzips it."""
     print("Scraping GADM for geodatabase link...")
     out_path = INPUT_DIR / "SHP" / "gadm_410-gpkg.zip"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     response = requests.get(GADM_BASE_URL)
     if response.status_code != 200:
+        print(f"Failed to reach GADM. Status code: {response.status_code}")
         return
     
     soup = BeautifulSoup(response.text, "html.parser")
@@ -48,6 +53,7 @@ def collect_gadm():
     
     file_url = None
     for link in links:
+        # Looking for the Geodatabase link
         if link.text.strip().lower() == "geodatabase":
             file_url = link["href"]
             if not file_url.startswith("http"):
@@ -56,9 +62,25 @@ def collect_gadm():
 
     if file_url:
         print(f"Downloading GADM: {file_url}")
-        file_response = requests.get(file_url)
+        
+        # Added stream=True to handle the massive GADM file without crashing your RAM
+        file_response = requests.get(file_url, stream=True)
         with open(out_path, "wb") as f:
-            f.write(file_response.content)
+            for chunk in file_response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+                    
+        print("Download complete.")
+        
+        # --- Unzipping Logic ---
+        print(f"Unzipping {out_path.name}...")
+        with zipfile.ZipFile(out_path, 'r') as zip_ref:
+            # extractall() places the contents in the specified directory
+            # out_path.parent is your INPUT_DIR / "SHP" level
+            zip_ref.extractall(out_path.parent)
+            
+        print(f"Unzipping complete! Extracted to {out_path.parent}")
+        
     else:
         print("No geodatabase link found on GADM page.")
 
@@ -68,7 +90,7 @@ def collect_guil():
     geolocating EM-DAT administrative units.
     """
     print("Collecting GAUL/GUIL ADM2 administrative boundaries...")
-    out_path = INPUT_DIR / "SHP" / "global_shapefile_GUIL_adm2.gpkg"
+    out_path = INPUT_DIR / "SHP" / "global_shapefile_GUIL_adm2.zip"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Note: FAO GAUL usually requires a direct file request or 
@@ -155,13 +177,6 @@ def collect_srtm():
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
         list(tqdm(executor.map(download_and_extract, tile_names), total=len(tile_names)))
 
-def create_region_dataset():
-    df = create_basin_dataset()
-    out_dir = INPUT_DIR / "model_input_dataset"
-    os.makedirs(out_dir, exist_ok=True)
-    out_path = out_dir / "un_regions.csv"
-    df.to_csv(out_path, index=False)
-
 
 def download_all_public_data():
     """Main orchestrator for collecting all public hazard and spatial data."""
@@ -173,9 +188,8 @@ def download_all_public_data():
     collect_jrc()
     collect_srtm()
     collect_flood_risk()
-    collect_shdi()
-    # Create also a dataset with region information
-    create_region_dataset()
+    # collect_shdi()
+
 
 if __name__ == "__main__":
     download_all_public_data()

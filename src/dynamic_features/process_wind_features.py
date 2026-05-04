@@ -187,7 +187,7 @@ def process_storm_tracks(tc_tracks):
         
     return tracks
 
-def process_single_country(iso3, out_dir, gdf_global, shp_global, all_events_global):
+def process_single_country(iso3, out_dir, gdf_global, all_events_global):
     """Processes a single country's windfield and metadata data."""
     out_file = out_dir / f"windfield_data_{iso3}.csv"
     if out_file.exists(): return None
@@ -210,7 +210,7 @@ def process_single_country(iso3, out_dir, gdf_global, shp_global, all_events_glo
 def generate_all_wind_features(max_workers=5):
     """Entry point to execute wind processing."""
     print("Loading global grid and shapefile data...")
-    gdf_global, gdf_all_global, shp_global = load_data()
+    gdf_global, shp_global = load_data()
     shp_global["iso3"] = shp_global.GID_0
     
     print("Loading global impact metadata...")
@@ -226,7 +226,7 @@ def generate_all_wind_features(max_workers=5):
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(
-                process_single_country, iso3, out_dir, gdf_global, gdf_all_global, shp_global, all_events_global
+                process_single_country, iso3, out_dir, gdf_global, all_events_global
             ): iso3 
             for iso3 in valid_iso3_list
         }

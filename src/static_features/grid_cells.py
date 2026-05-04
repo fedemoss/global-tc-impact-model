@@ -28,7 +28,7 @@ def filter_grid_by_land(grid_gdf, shp_path):
     """
     print("Loading GADM boundaries for land-overlap filtering...")
     # Load the global GeoPackage downloaded by general_collector.py
-    world = gpd.read_file(shp_path, layer="ADM_0")
+    world = gpd.read_file(shp_path)
     
     # Filter for countries in the study consideration list
     world = world[world['GID_0'].isin(ISO3_LIST)]
@@ -39,7 +39,12 @@ def filter_grid_by_land(grid_gdf, shp_path):
     # Clean up and add unique IDs
     grid_land = grid_land.drop(columns=["index_right"])
     grid_land = grid_land.rename(columns={"GID_0": "iso3"})
-    grid_land["id"] = range(len(grid_land))
+    
+    # Generate the ID formatted as iso3_xxxxx (e.g., PHL_00000)
+    # cumcount() creates a 0-indexed counter for each iso3 group
+    # zfill(5) pads the number to 5 digits with leading zeros
+    sequence = grid_land.groupby("iso3").cumcount().astype(str).str.zfill(5)
+    grid_land["id"] = grid_land["iso3"] + "_" + sequence
     
     return grid_land
 
@@ -55,7 +60,7 @@ def create_centroids(grid_land):
 
 def main_grid_generation():
     """Main execution to create the study's coordinate reference system."""
-    shp_path = INPUT_DIR / "SHP" / "gadm_410-gpkg.zip"
+    shp_path = INPUT_DIR / "SHP" / "gadm_410.gdb"
     out_dir = INPUT_DIR / "GRID" / "merged"
     out_dir.mkdir(parents=True, exist_ok=True)
     

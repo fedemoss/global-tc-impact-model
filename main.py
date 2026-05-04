@@ -10,9 +10,9 @@ from src.collectors.general_collector import download_all_public_data
 from src.static_features.grid_cells import main_grid_generation
 
 # Static Processors
+from src.utils.region_matching import create_region_dataset
 from src.static_features.process_worldpop import process_all_worldpop
 from src.static_features.process_srtm import process_all_srtm
-from src.static_features.process_coastline import process_all_coastal
 from src.static_features.process_jrc import process_all_jrc
 from src.static_features.process_landslide import process_all_landslide
 from src.static_features.process_storm_surges import process_all_surges
@@ -68,9 +68,9 @@ def main():
         if not args.stage or args.stage == "static":
             logging.info("Stage 3: Processing Static Spatial Layers...")
             process_gadm_adm2()
+            create_region_dataset() # Create also a dataset with region information
             process_all_worldpop()
             process_all_srtm()
-            process_all_coastal()
             process_all_jrc()
             process_all_landslide()
             process_all_surges()

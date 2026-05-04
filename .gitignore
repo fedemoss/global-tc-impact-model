@@ -3,26 +3,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# C extensions
-*.so
-
-# csv
-*.csv
-
-# numpy files
-*.npz
-
-# out files
-*.out
-
-# TIFF files
-*.tif
-
-# zipped files
-*.zip
-
-# gpkg files
-*.gpkg
+# Everything in /data
+/data/*
 
 # Distribution / packaging
 .Python

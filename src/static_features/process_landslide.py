@@ -20,7 +20,7 @@ def aggregate_raster_to_grid(raster_path, grid):
 
 def process_all_landslide():
     grid_global = gpd.read_file(INPUT_DIR / "GRID" / "merged" / "global_grid_land_overlap.gpkg")
-    grid_global["iso3"] = grid_global["GID_0"]
+    grid_global["GID_0"] = grid_global["iso3"]
 
     raster_path = INPUT_DIR / "LandSlides" / "landslide_data.tif"
 

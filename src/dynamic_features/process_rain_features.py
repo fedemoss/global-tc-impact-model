@@ -12,10 +12,19 @@ from shapely.geometry import Polygon
 
 from src.config import INPUT_DIR, OUTPUT_DIR, ISO3_LIST
 
+# -------------------------------------------------------------------
+# Configuration & Logging
+# -------------------------------------------------------------------
+LOG_DIR = OUTPUT_DIR / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
 logging.basicConfig(
-    filename="rainfall_processing.log",
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_DIR / "process_rain.log"),
+        logging.StreamHandler()
+    ]
 )
 
 def get_date_list(df_meta, sid, days_to_landfall=2):

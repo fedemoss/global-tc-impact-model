@@ -48,7 +48,7 @@ def prepare_data(aggregate_to_adm1=False):
         df = df.groupby(["DisNo.", "sid", "level", "GID_0", "GID_1", "iso3", "cyclone_basin", "date"]).agg(agg_dict).reset_index()
 
     # Add Date Info
-    emdat = pd.read_csv(INPUT_DIR / "EMDAT" / "emdat-tropicalcyclone-2000-2022-processed-sids.csv")
+    emdat = pd.read_csv(INPUT_DIR / "EMDAT" / "emdat.csv")
     emdat_red = emdat[["DisNo.", 'Start Year', 'Start Month', 'Start Day']].drop_duplicates()
     emdat_red["Start Day"] = emdat_red["Start Day"].fillna(1)
     emdat_red["date"] = pd.to_datetime(dict(year=emdat_red["Start Year"], month=emdat_red["Start Month"], day=emdat_red["Start Day"].astype(int)), errors="coerce")

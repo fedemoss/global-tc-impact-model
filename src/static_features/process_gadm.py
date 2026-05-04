@@ -20,7 +20,7 @@ def process_gadm_adm2():
     Falls back to ADM1 for countries where ADM2 is unavailable.
     """
     print("Processing GADM to unified sub-national levels...")
-    raw_path = INPUT_DIR / "SHP" / "gadm_410-gpkg.zip"
+    raw_path = INPUT_DIR / "SHP" / "gadm_410.gdb"
     out_path = INPUT_DIR / "SHP" / "global_shapefile_GID_adm2.gpkg"
     
     if not raw_path.exists():

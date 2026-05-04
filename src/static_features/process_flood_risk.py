@@ -53,12 +53,12 @@ def process_all_flood():
     tile_paths = [tile_dir / f for f in os.listdir(tile_dir) if f.endswith("_depth_reclass.tif")]
 
     grid = gpd.read_file(INPUT_DIR / "GRID" / "merged" / "global_grid_land_overlap.gpkg")
-    grid["iso3"] = grid["GID_0"]
+    grid["GID_0"] = grid["iso3"]
 
     out_dir = OUTPUT_DIR / "FloodRisk" / "grid_data"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    valid_iso3 = [iso for iso in ISO3_LIST if iso in grid.iso3.unique()]
+    valid_iso3 = grid.iso3.unique()
 
     with ThreadPoolExecutor(max_workers=4) as executor:
         for iso in valid_iso3:

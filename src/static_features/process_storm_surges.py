@@ -3,6 +3,7 @@ import numpy as np
 import geopandas as gpd
 import pandas as pd
 import xarray as xr
+from pathlib import Path
 from shapely.geometry import Point, Polygon
 from sklearn.neighbors import NearestNeighbors
 from src.config import INPUT_DIR, OUTPUT_DIR
@@ -82,22 +83,55 @@ def process_storm_surge_risk(gdf, gdf_coastline, grid_cells, output_csv, R=0.5):
     print(f"Storm surge risk data saved to: {output_csv}")
 
 
-def process_all_surges():
-    dataset = xr.open_dataset(INPUT_DIR / "StormSurges" / "storm_surges_data.nc")
-    gdf = create_geodataframe_from_nc(dataset)
 
-    grid_cells = gpd.read_file(INPUT_DIR / "GRID" / "merged" / "global_grid_land_overlap.gpkg")
+def process_all_surges():
+    """
+    Processes global storm surge risk by mapping surge data to coastal grid cells.
+    Coastal identification is performed dynamically using the processed SRTM 
+    terrain datasets for each country.
+    """
+    # 1. Load Storm Surge source data
+    surge_nc_path = INPUT_DIR / "StormSurges" / "storm_surges_data.nc"
+    dataset = xr.open_dataset(surge_nc_path)
+    gdf_surges = create_geodataframe_from_nc(dataset)
+
+    # 2. Load and prepare the global land grid
+    grid_path = INPUT_DIR / "GRID" / "merged" / "global_grid_land_overlap.gpkg"
+    grid_cells = gpd.read_file(grid_path)
     grid_cells["geometry"] = grid_cells["geometry"].apply(adjust_longitude)
+    
+    # Standardize country identifier
     grid_cells["GID_0"] = grid_cells["iso3"] if "iso3" in grid_cells.columns else grid_cells["GID_0"]
 
-    df_coastline = pd.read_csv(OUTPUT_DIR / "features" / "coastline_length.csv")
-    df_coastline = df_coastline[df_coastline.coast_length_meters > 0]
+    # 3. Identify Coastal Grid IDs from SRTM feature sets
+    srtm_dir = OUTPUT_DIR / "SRTM" / "grid_data"
+    srtm_files = list(srtm_dir.glob("srtm_grid_data_*.csv"))
 
-    gdf_coastline = gpd.GeoDataFrame(df_coastline.merge(grid_cells, how="left"), geometry="geometry")[["id", "GID_0", "geometry"]]
+    if not srtm_files:
+        raise FileNotFoundError(f"No processed SRTM data found in {srtm_dir}. Ensure process_srtm.py has run.")
+
+    coastal_ids = []
+    for srtm_file in srtm_files:
+        df_srtm = pd.read_csv(srtm_file)
+        
+        # Identify grid cells with coastline presence
+        if "with_coast" in df_srtm.columns:
+            ids = df_srtm[df_srtm["with_coast"] == 1]["id"].tolist()
+            coastal_ids.extend(ids)
+        elif "coast_length_meters" in df_srtm.columns:
+            ids = df_srtm[df_srtm["coast_length_meters"] > 0]["id"].tolist()
+            coastal_ids.extend(ids)
+
+    # 4. Filter the grid to coastal geometries for surge processing
+    # We subset the main grid based on the IDs collected from the SRTM features
+    gdf_coastline = grid_cells[grid_cells["id"].isin(coastal_ids)].copy()
     gdf_coastline["geometry"] = gdf_coastline["geometry"].apply(adjust_longitude)
 
+    # 5. Execute spatial risk assessment and export results
     output_csv = OUTPUT_DIR / "StormSurges" / "grid_data" / "global_grid_storm_surges_risk.csv"
-    process_storm_surge_risk(gdf, gdf_coastline, grid_cells, output_csv)
+    output_csv.parent.mkdir(parents=True, exist_ok=True)
+
+    process_storm_surge_risk(gdf_surges, gdf_coastline, grid_cells, output_csv)
 
 if __name__ == "__main__":
     process_all_surges()

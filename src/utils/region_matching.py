@@ -1,39 +1,33 @@
+import os
 import pandas as pd
 import country_converter as coco
-
-from src.config import (
-    INPUT_DIR
-)
+from src.config import INPUT_DIR
 
 # -------------------------------------------------------------------
 # Basin and Region Mapping
 # -------------------------------------------------------------------
 def create_un_regions_csv():
-    """Generates the ISO3 to UN Region mapping required for model training."""
+    """Generates the ISO3 to UN Region and Continent mapping."""
     out_path = INPUT_DIR / "model_input_dataset" / "un_regions.csv"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     
-    if out_path.exists(): return
+    if out_path.exists(): 
+        return pd.read_csv(out_path)
     
-    # Use the ISO3_LIST from config
     from src.config import ISO3_LIST
     df = pd.DataFrame({"iso3": ISO3_LIST})
     df['region'] = coco.convert(names=df['iso3'], to='UNregion')
+    df['continent'] = coco.convert(names=df['iso3'], to='continent')
     
     df.to_csv(out_path, index=False)
-    print(f"Created regional mapping at {out_path}")
+    return df
 
 def add_basin_information(df):
     """
-    Appends the UN Region, Continent, and Cyclone Basin based on the ISO3 country code.
+    Appends the Cyclone Basin based on the UN Region.
     """
-    if "iso3" not in df.columns:
-        raise ValueError("Dataframe must contain an 'iso3' column.")
-
-    unique_iso3 = df[["iso3"]].drop_duplicates().reset_index(drop=True)
-    
-    unique_iso3['continent'] = coco.convert(names=unique_iso3['iso3'], to='continent')
-    unique_iso3['region'] = coco.convert(names=unique_iso3['iso3'], to='UNregion')
+    if "region" not in df.columns:
+        raise ValueError("Dataframe must contain a 'region' column.")
 
     un_region_to_basin = {
         "Caribbean": "North Atlantic",
@@ -53,14 +47,22 @@ def add_basin_information(df):
         "Southern Europe": "Europe",
     }
     
-    unique_iso3["cyclone_basin"] = unique_iso3["region"].map(un_region_to_basin)
-    
-    return df.merge(unique_iso3, on="iso3", how="left")
+    df["cyclone_basin"] = df["region"].map(un_region_to_basin)
+    return df
 
 def create_basin_dataset():
-    """ Generates a dataset with UN region and Cyclone Basin information """
+    """Generates a dataset with UN region, Continent, and Cyclone Basin information."""
     df = create_un_regions_csv()
     return add_basin_information(df)
 
+def create_region_dataset():
+    """Main pipeline for region dataset creation."""
+    df = create_basin_dataset()
+    out_dir = INPUT_DIR / "model_input_dataset"
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = out_dir / "un_regions.csv"
+    
+    df.to_csv(out_path, index=False)
+
 if __name__ == "__main__":
-    create_basin_dataset()
+    create_region_dataset()

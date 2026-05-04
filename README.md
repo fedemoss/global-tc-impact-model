@@ -32,9 +32,9 @@ The core of this project is the **Data Factory**, which automates the collection
 
 ### 1. System Dependencies
 The pipeline relies on several low-level geospatial libraries for raster processing and atmospheric data handling:
-* **Python 3.9+**: The core environment.
+* **Python 3.10+**: The core environment.
 * **GDAL (Geospatial Data Abstraction Library)**: Required for processing SRTM elevation data and JRC urbanization rasters (specifically `gdaldem`).
-* **Climate Data Operators (CDO)**: Required for handling the NetCDF/HDF5 structures of the NASA PPS rainfall data.
+
 
 
 #### **GDAL (Geospatial Data Abstraction Library)**
@@ -43,17 +43,14 @@ The pipeline relies on several low-level geospatial libraries for raster process
     * **macOS (Homebrew):** `brew install gdal`
     * **Windows:** Use the [OSGeo4W installer](https://trac.osgeo.org/osgeo4w/) or install via Conda: `conda install -c conda-forge gdal`.
 
-#### **CDO (Climate Data Operators)**
-* **Installation:**
-    * **Ubuntu/Debian:** `sudo apt-get install cdo`
-    * **macOS (Homebrew):** `brew install cdo`
-    * **Windows:** CDO is natively Linux-based. It is best run via **WSL2** (Windows Subsystem for Linux) or via Conda: `conda install -c conda-forge cdo`.
 
 ### 2. Python Environment
 Install the required Python libraries using the provided `requirements.txt`:
 ```bash
 pip install -r requirements.txt
 ```
+
+**Note**: Install GDAL first, then the requirements.txt pip list
 
 ### 3. External Data Requirements
 * **EM-DAT (Ground Truth)**: The pipeline is anchored by verified disaster records. You must place your processed EM-DAT file at:  
@@ -70,6 +67,8 @@ pip install -r requirements.txt
 **Note: we leave to the user the "sid" and "Disno." matching of storms. This involves manual labeling based TC names, locations and dates on top of classic fuzzy-matching techniques or (alternatively) the use of LLM matching approaches.** 
 
 * **NASA PPS (Precipitation)**: To access GPM-IMERG rainfall data, register a free account at [NASA PPS](https://pps.gsfc.nasa.gov/). Once registered, configure your credentials in `src/collectors/pps_collector.py`.
+
+* **SHDI Index (Vulnerability)**: Download this dataset manually from *https://globaldatalab.org/shdi/download/shdi/* and put it in under `/data/SHDI/GDL-Subnational-HDI-data.csv` (requires logging to GlobalDataLab)
 
 ---
 

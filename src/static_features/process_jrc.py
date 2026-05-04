@@ -18,7 +18,7 @@ def adjust_longitude(polygon):
 def adjust_data(grid, src):
     grid_transformed = grid.copy()
     grid_transformed["geometry"] = grid_transformed["geometry"].apply(adjust_longitude)
-    grid_transformed = grid_transformed[["id", "iso3", "Latitude", "Longitude", "geometry"]]
+    grid_transformed = grid_transformed[["id", "iso3", "geometry"]]
     src_wgs84 = src.rio.reproject(grid_transformed.crs)
     return grid_transformed, src_wgs84
 
@@ -54,7 +54,7 @@ def process_all_jrc():
     src = rxr.open_rasterio(INPUT_DIR / "JRC" / file_name)
 
     global_grid = gpd.read_file(INPUT_DIR / "GRID" / "merged" / "global_grid_land_overlap.gpkg")
-    global_grid["iso3"] = global_grid["GID_0"]
+    global_grid["GID_0"] = global_grid["iso3"]
 
     grid_transformed, src_wgs84 = adjust_data(global_grid, src)
 
