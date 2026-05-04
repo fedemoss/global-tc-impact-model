@@ -32,9 +32,9 @@ FEATURES = [
 
 # Non-contemplated features (Discussed in paper but excluded from global training)
 NON_CONTEMPLATED_FEATURES = [
-    "flood_risk",    # Excluded: Basins < 500km2 missing in 22/72 countries
-    "shdi"           # Note: SHDI used where available, but missing in 19/72 countries
-    "track_distance" # Excluded as its highly correlated with windspeed 
+    "flood_risk",     # Excluded: Basins < 500km2 missing in 22/72 countries
+    "shdi",           # Note: SHDI used where available, but missing in 19/72 countries
+    "track_distance", # Excluded as it is highly correlated with windspeed
 ]
 
 # ISO3 Country List

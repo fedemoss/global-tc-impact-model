@@ -1,6 +1,5 @@
-import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
+import logging
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import geopandas as gpd
 import numpy as np
@@ -10,6 +9,8 @@ from climada.hazard import Centroids, TCTracks, TropCyclone
 from shapely.geometry import LineString
 
 from src.config import INPUT_DIR, OUTPUT_DIR, ISO3_LIST
+
+logger = logging.getLogger(__name__)
 
 def windfield_to_grid(tc, tracks, grids):
     """From IbTracks tracks, create wind_speed and track_distance features and aggregate to grid cells."""
@@ -127,7 +128,8 @@ def get_storm_tracks(all_events):
             factor = conversion_to_10min.get(ws_flag, 1.0)
             track['max_sustained_wind'] = track['max_sustained_wind'] * factor
             sel_ibtracs.append(t)
-        except:
+        except Exception as e:
+            logger.warning(f"Skipping sid={sid}: {e}")
             problematic_sid.append(sid)
 
     tc_tracks = TCTracks()
@@ -145,7 +147,7 @@ def process_storm_tracks(tc_tracks):
     for i in range(len(tc_tracks.get_track())):
         try:
             track_xarray = tc_tracks.get_track()[i]
-        except:
+        except (IndexError, TypeError):
             track_xarray = tc_tracks.get_track()
             
         w = np.array(track_xarray.max_sustained_wind)
@@ -209,34 +211,39 @@ def process_single_country(iso3, out_dir, gdf_global, all_events_global):
 
 def generate_all_wind_features(max_workers=5):
     """Entry point to execute wind processing."""
-    print("Loading global grid and shapefile data...")
+    logger.info("Loading global grid and shapefile data...")
     gdf_global, shp_global = load_data()
     shp_global["iso3"] = shp_global.GID_0
-    
-    print("Loading global impact metadata...")
+
+    logger.info("Loading global impact metadata...")
     all_events_global = load_impact_data()
-    
+
     # Filter ISO3 list based on events present in impact dataset
     valid_iso3_list = [iso3 for iso3 in ISO3_LIST if iso3 in all_events_global.GID_0.unique()]
-    
+
     out_dir = OUTPUT_DIR / "IBTRACS" / "standard"
     out_dir.mkdir(parents=True, exist_ok=True)
-    
-    print(f"Starting windfield processing for {len(valid_iso3_list)} countries...")
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+
+    logger.info(f"Starting windfield processing for {len(valid_iso3_list)} countries...")
+    # CLIMADA's TC computations are CPU-bound NumPy work — processes give
+    # actual parallelism whereas threads were blocked by the GIL.
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(
                 process_single_country, iso3, out_dir, gdf_global, all_events_global
-            ): iso3 
+            ): iso3
             for iso3 in valid_iso3_list
         }
-        
+
         for future in as_completed(futures):
             iso3 = futures[future]
             try:
                 future.result()
             except Exception as e:
-                print(f"Error processing wind data for {iso3}: {e}")
+                logger.error(f"Error processing wind data for {iso3}: {e}", exc_info=True)
+
 
 if __name__ == "__main__":
+    from src.utils.logging_setup import configure_logging
+    configure_logging()
     generate_all_wind_features(max_workers=5)

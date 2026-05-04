@@ -1,21 +1,15 @@
-import os
+import logging
 from concurrent.futures import ThreadPoolExecutor
+
 import geopandas as gpd
 import rasterio
 from rasterio.mask import mask
-from shapely.geometry import Polygon
+
 from src.config import INPUT_DIR, OUTPUT_DIR, ISO3_LIST
+from src.utils.geo_utils import adjust_longitude
 
-import logging
-logging.basicConfig(level=logging.ERROR, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
-def adjust_longitude(polygon):
-    coords = list(polygon.exterior.coords)
-    for i in range(len(coords)):
-        lon, lat = coords[i]
-        if lon > 180:
-            coords[i] = (lon - 360, lat)
-    return Polygon(coords)
 
 def calculate_population(geometry, raster, transform):
     out_image, _ = mask(raster, [geometry], crop=True)
@@ -34,31 +28,39 @@ def process_country(iso, grid, raster_path, out_folder):
             return f"File already exists for {iso}, skipping."
 
         grid_country = grid[grid.iso3 == iso].reset_index(drop=True)
-        
+
         with rasterio.open(raster_path) as raster:
             pop_country = pop_to_grid(grid_country, raster)
-            
+
         pop_country.to_csv(output_path, index=False)
         return f"Processed {iso} successfully."
     except Exception as e:
-        logging.error(f"Error processing {iso}: {e}")
+        logger.error(f"Error processing {iso}: {e}", exc_info=True)
         return f"Error processing {iso}."
-    
+
+
 def process_all_worldpop():
     raster_path = INPUT_DIR / "Worldpop" / "ppp_2020_1km_Aggregated.tif"
     out_folder = OUTPUT_DIR / "Worldpop" / "grid_data"
     out_folder.mkdir(parents=True, exist_ok=True)
 
     grid = gpd.read_file(INPUT_DIR / "GRID" / "merged" / "global_grid_land_overlap.gpkg")
-    grid["GID_0"] = grid["iso3"] 
-    grid["geometry"] = grid["geometry"].apply(adjust_longitude)
+    grid["GID_0"] = grid["iso3"]
+    needs_wrap = grid.geometry.apply(
+        lambda g: any(lon > 180 for lon, _ in g.exterior.coords) if g is not None else False
+    )
+    if needs_wrap.any():
+        grid.loc[needs_wrap, "geometry"] = grid.loc[needs_wrap, "geometry"].apply(adjust_longitude)
 
     valid_iso3_list = [iso for iso in ISO3_LIST if iso in grid.iso3.unique()]
 
     with ThreadPoolExecutor(max_workers=4) as executor:
         futures = [executor.submit(process_country, iso, grid, raster_path, out_folder) for iso in valid_iso3_list]
         for future in futures:
-            print(future.result())
+            logger.info(future.result())
+
 
 if __name__ == "__main__":
+    from src.utils.logging_setup import configure_logging
+    configure_logging()
     process_all_worldpop()

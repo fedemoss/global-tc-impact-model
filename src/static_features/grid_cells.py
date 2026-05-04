@@ -1,39 +1,44 @@
-import os
-import numpy as np
-import pandas as pd
+import logging
+
 import geopandas as gpd
+import numpy as np
 from shapely.geometry import box
+
 from src.config import INPUT_DIR, ISO3_LIST
+
+logger = logging.getLogger(__name__)
+
 
 def generate_global_grid(res=0.1):
     """
     Generates a global 0.1 degree grid of bounding boxes.
     Matches the resolution specified in the paper (approx. 11km at equator).
     """
-    print(f"Generating global grid at {res} degree resolution...")
+    logger.info(f"Generating global grid at {res} degree resolution...")
     lon_bins = np.arange(-180, 180, res)
     lat_bins = np.arange(-90, 90, res)
-    
+
     grid_cells = []
     for lon in lon_bins:
         for lat in lat_bins:
             grid_cells.append(box(lon, lat, lon + res, lat + res))
-            
+
     return gpd.GeoDataFrame(geometry=grid_cells, crs="EPSG:4326")
+
 
 def filter_grid_by_land(grid_gdf, shp_path):
     """
     Clips the global grid to landmasses using GADM boundaries.
     Filters by the study's ISO3 list to optimize processing.
     """
-    print("Loading GADM boundaries for land-overlap filtering...")
+    logger.info("Loading GADM boundaries for land-overlap filtering...")
     # Load the global GeoPackage downloaded by general_collector.py
     world = gpd.read_file(shp_path)
     
     # Filter for countries in the study consideration list
     world = world[world['GID_0'].isin(ISO3_LIST)]
     
-    print("Performing spatial join (filtering grid to land overlap)...")
+    logger.info("Performing spatial join (filtering grid to land overlap)...")
     grid_land = gpd.sjoin(grid_gdf, world[['GID_0', 'geometry']], how="inner", predicate="intersects")
     
     # Clean up and add unique IDs
@@ -65,25 +70,23 @@ def main_grid_generation():
     out_dir.mkdir(parents=True, exist_ok=True)
     
     if not shp_path.exists():
-        print(f"Error: GADM shapefile not found at {shp_path}. Run general_collector.py first.")
+        logger.error(f"GADM shapefile not found at {shp_path}. Run general_collector.py first.")
         return
 
-    # 1. Generate Global Tessellation
     raw_grid = generate_global_grid(res=0.1)
-    
-    # 2. Filter to Land Overlap
     land_grid = filter_grid_by_land(raw_grid, shp_path)
-    
-    # 3. Save Polygon Grid (Used for Zonal Statistics)
+
     grid_file = out_dir / "global_grid_land_overlap.gpkg"
     land_grid.to_file(grid_file, driver="GPKG")
-    print(f"Polygon grid saved to {grid_file}")
-    
-    # 4. Save Centroid Grid (Used for Wind/Rain/Distance hazards)
+    logger.info(f"Polygon grid saved to {grid_file}")
+
     centroid_grid = create_centroids(land_grid)
     centroid_file = out_dir / "global_grid_centroids.csv"
     centroid_grid.to_csv(centroid_file, index=False)
-    print(f"Centroid data saved to {centroid_file}")
+    logger.info(f"Centroid data saved to {centroid_file}")
+
 
 if __name__ == "__main__":
+    from src.utils.logging_setup import configure_logging
+    configure_logging()
     main_grid_generation()

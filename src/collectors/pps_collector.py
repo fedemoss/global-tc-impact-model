@@ -1,9 +1,14 @@
+import logging
 import os
 import time
+
+import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-import pandas as pd
+
 from src.config import INPUT_DIR
+
+logger = logging.getLogger(__name__)
 
 USERNAME = os.getenv("NASA_PPS_USERNAME")
 PASSWORD = os.getenv("NASA_PPS_PASSWORD")
@@ -47,4 +52,4 @@ def download_gpm_late_run(start_date, end_date, typhoon_name):
                 time.sleep(0.2)
                 with open(file_path, "wb") as f:
                     f.write(r.content)
-    print(f"Finished downloading rainfall data for {typhoon_name}")
+    logger.info(f"Finished downloading rainfall data for {typhoon_name}")

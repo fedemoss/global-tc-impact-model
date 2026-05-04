@@ -1,7 +1,10 @@
 import argparse
 import logging
 import sys
+from pathlib import Path
+
 from src.config import INPUT_DIR
+from src.utils.logging_setup import configure_logging
 
 # Collectors
 from src.collectors.general_collector import download_all_public_data
@@ -31,28 +34,33 @@ from src.dataset_builder import compile_global_dataset
 from src.models.train import execute_training_run
 from src.interpretability.shap_analysis import main_shap_analysis
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
 
 def main():
     parser = argparse.ArgumentParser(description="Global TC Impact Data Factory")
-    
+
     # Operation Mode
-    parser.add_argument("--build-dataset", action="store_true", default=True,
+    parser.add_argument("--build-dataset", action="store_true", default=False,
                         help="Generate the full training_dataset.parquet")
-    parser.add_argument("--run-models", action="store_true", 
+    parser.add_argument("--run-models", action="store_true",
                         help="Train the 2-stage XGBoost model")
     parser.add_argument("--run-interpretability", action="store_true",
                         help="Run SHAP analysis on trained models")
 
     # Selective Stage (for debugging)
-    parser.add_argument("--stage", type=str, 
+    parser.add_argument("--stage", type=str,
                         choices=["collect", "grid", "static", "dynamic", "build"])
 
     args = parser.parse_args()
+
+    # If no operation mode is specified, default to building the dataset
+    if not (args.build_dataset or args.run_models or args.run_interpretability or args.stage):
+        args.build_dataset = True
+
+    # Selecting a stage implies dataset building
+    if args.stage:
+        args.build_dataset = True
+
+    configure_logging()
 
     # --- DATA PIPELINE ---
     if args.build_dataset:

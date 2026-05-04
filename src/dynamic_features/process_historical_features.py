@@ -1,6 +1,11 @@
-import os
+import logging
+
 import pandas as pd
+
 from src.config import INPUT_DIR, OUTPUT_DIR
+
+logger = logging.getLogger(__name__)
+
 
 def create_past_events_feature(impact_data_path, grid_data_path):
     """
@@ -76,19 +81,24 @@ def generate_all_historical_features():
     """Entry point to execute historical feature generation."""
     impact_path = INPUT_DIR / "EMDAT" / "global_grid_impact_data.csv"
     grid_path = INPUT_DIR / "GRID" / "merged" / "global_grid_municipality_info.csv"
-    
-    out_dir = OUTPUT_DIR / "features"
+
+    # Write to OUTPUT_DIR / "dynamic_features" — matches the path read by
+    # dataset_builder.compile_global_dataset.
+    out_dir = OUTPUT_DIR / "dynamic_features"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / "historical_events_feature.csv"
-    
+
     if out_file.exists():
-        print("Historical feature dataset already exists.")
+        logger.info("Historical feature dataset already exists.")
         return
-        
-    print("Generating N_events_5_years feature...")
+
+    logger.info("Generating N_events_5_years feature...")
     historical_df = create_past_events_feature(impact_path, grid_path)
     historical_df.to_csv(out_file, index=False)
-    print(f"Saved historical features to {out_file}")
+    logger.info(f"Saved historical features to {out_file}")
+
 
 if __name__ == "__main__":
+    from src.utils.logging_setup import configure_logging
+    configure_logging()
     generate_all_historical_features()

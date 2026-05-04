@@ -1,7 +1,10 @@
-import os
+import logging
+
 import pandas as pd
-from pathlib import Path
+
 from src.config import INPUT_DIR, OUTPUT_DIR, ISO3_LIST
+
+logger = logging.getLogger(__name__)
 
 def load_static_features(iso3):
     """
@@ -149,7 +152,10 @@ def compile_global_dataset():
     out_path = INPUT_DIR / "model_input_dataset"
     out_path.mkdir(parents=True, exist_ok=True)
     df_master.to_parquet(out_path / "training_dataset.parquet", index=False)
-    print(f"Master training dataset saved. Total rows: {len(df_master)}")
+    logger.info(f"Master training dataset saved. Total rows: {len(df_master)}")
+
 
 if __name__ == "__main__":
+    from src.utils.logging_setup import configure_logging
+    configure_logging()
     compile_global_dataset()

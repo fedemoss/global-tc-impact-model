@@ -1,23 +1,23 @@
-import os
+import logging
+
 import geopandas as gpd
 import pandas as pd
 import rioxarray as rxr
 from rasterstats import zonal_stats
-from shapely.geometry import Polygon
-from concurrent.futures import ProcessPoolExecutor
-from src.config import INPUT_DIR, OUTPUT_DIR, ISO3_LIST
 
-def adjust_longitude(polygon):
-    coords = list(polygon.exterior.coords)
-    for i in range(len(coords)):
-        lon, lat = coords[i]
-        if lon > 180:
-            coords[i] = (lon - 360, lat)
-    return Polygon(coords)
+from src.config import INPUT_DIR, OUTPUT_DIR, ISO3_LIST
+from src.utils.geo_utils import adjust_longitude
+
+logger = logging.getLogger(__name__)
+
 
 def adjust_data(grid, src):
     grid_transformed = grid.copy()
-    grid_transformed["geometry"] = grid_transformed["geometry"].apply(adjust_longitude)
+    needs_wrap = grid_transformed.geometry.apply(
+        lambda g: any(lon > 180 for lon, _ in g.exterior.coords) if g is not None else False
+    )
+    if needs_wrap.any():
+        grid_transformed.loc[needs_wrap, "geometry"] = grid_transformed.loc[needs_wrap, "geometry"].apply(adjust_longitude)
     grid_transformed = grid_transformed[["id", "iso3", "geometry"]]
     src_wgs84 = src.rio.reproject(grid_transformed.crs)
     return grid_transformed, src_wgs84
@@ -25,7 +25,7 @@ def adjust_data(grid, src):
 def calculate_urban_rural_water(grid, raster, out_dir, iso3, nodata_value=128):
     file_path = out_dir / f"degree_of_urbanization_{iso3}.csv"
     if file_path.exists():
-        print(f"File already exists for {iso3}, skipping.")
+        logger.info(f"File already exists for {iso3}, skipping.")
         return
 
     smod_raster_wgs84_clip = raster.rio.clip_box(*grid.total_bounds)
@@ -47,7 +47,7 @@ def calculate_urban_rural_water(grid, raster, out_dir, iso3, nodata_value=128):
     smod_grid_vals["id"] = grid["id"].values
     df_urban_rural = smod_grid_vals[["id", "urban", "rural", "water"]]
     df_urban_rural.to_csv(file_path, index=False)
-    print(f"Processed {iso3} and saved.")
+    logger.info(f"Processed {iso3} and saved.")
 
 def process_all_jrc():
     file_name = "GHS_SMOD_P2025_GLOBE_R2022A_54009_1000_V1_0.tif"
@@ -67,5 +67,7 @@ def process_all_jrc():
         calculate_urban_rural_water(grid_transformed[grid_transformed.iso3 == iso3], src_wgs84, out_dir, iso3)
 
 if __name__ == "__main__":
+    from src.utils.logging_setup import configure_logging
+    configure_logging()
     process_all_jrc()
 

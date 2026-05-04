@@ -1,14 +1,14 @@
-import os
 import ast
-import logging
 import gc
-import pandas as pd
+import logging
+import os
+
 import geopandas as gpd
-import numpy as np
-from pathlib import Path
+import pandas as pd
+
 from src.config import INPUT_DIR, OUTPUT_DIR
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger(__name__)
 
 # -------------------------------------------------------------------
 # Helper Utilities
@@ -249,4 +249,6 @@ def process_emdat_events():
     calculate_grid_impact()
 
 if __name__ == "__main__":
+    from src.utils.logging_setup import configure_logging
+    configure_logging()
     process_emdat_events()

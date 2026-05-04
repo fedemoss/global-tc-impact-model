@@ -3,55 +3,23 @@ import logging
 import os
 import subprocess
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import Pool, cpu_count
-from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import rasterio
 from rasterstats import zonal_stats
-from shapely.geometry import Polygon
 from sklearn.neighbors import NearestNeighbors
 
 from src.config import INPUT_DIR, OUTPUT_DIR
-
-# -------------------------------------------------------------------
-# Configuration & Logging
-# -------------------------------------------------------------------
-LOG_DIR = OUTPUT_DIR / "logs"
-LOG_DIR.mkdir(parents=True, exist_ok=True)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_DIR / "process_srtm.log"),
-        logging.StreamHandler()
-    ]
+from src.utils.geo_utils import (
+    GLOBAL_METRIC_EPSG,
+    adjust_longitude,
+    is_antimeridian_crossing,
 )
 
-# -------------------------------------------------------------------
-# Geometry Utilities
-# -------------------------------------------------------------------
-
-def adjust_longitude(polygon):
-    """Adjusts polygon longitude to [-360, 0) as required by SRTM data."""
-    coords = list(polygon.exterior.coords)
-    for i in range(len(coords)):
-        lon, lat = coords[i]
-        if lon > 180:
-            coords[i] = (lon - 360, lat)
-    return Polygon(coords)
-
-
-def is_border_crossing(polygon):
-    """Identifies if a polygon straddles the meridian."""
-    coords = list(polygon.exterior.coords)
-    has_pos = any(lon > 0 for lon, lat in coords)
-    has_neg = any(lon < 0 for lon, lat in coords)
-    return has_pos and has_neg
+logger = logging.getLogger(__name__)
 
 # -------------------------------------------------------------------
 # Raster Tile Management
@@ -85,8 +53,8 @@ def run_terrain_task(grid_subset, raster_path):
     Calculates altitude, slope, and ruggedness for a single tile.
     Executes sequentially within a process to avoid CPU over-subscription.
     """
-    # Remove border crossing polygons for this specific raster calculation
-    grid_clean = grid_subset[~grid_subset["geometry"].apply(is_border_crossing)].copy()
+    # Remove antimeridian-crossing polygons for this specific raster calculation
+    grid_clean = grid_subset[~grid_subset["geometry"].apply(is_antimeridian_crossing)].copy()
     if grid_clean.empty:
         return None
 
@@ -149,14 +117,14 @@ def get_coast_features(shp_country, grid_country):
     """Calculates coastline binary flag and length in meters."""
     dissolved = shp_country.dissolve(by="GID_0")
     coastline = dissolved.boundary
-    
-    # Intersection overlay
+
     coast_gdf = gpd.GeoDataFrame(geometry=coastline, crs=grid_country.crs)
     grid_line = gpd.overlay(coast_gdf, grid_country, how="intersection")
-    
-    # Calculate length in meters (EPSG:25394 is a placeholder for metric projections)
-    grid_line["coast_length_meters"] = grid_line.to_crs(epsg=25394).length
-    
+
+    # World Cylindrical Equal Area — preserves length-scale globally and avoids
+    # the local-only EPSG:25394 (Philippines) used previously.
+    grid_line["coast_length_meters"] = grid_line.to_crs(epsg=GLOBAL_METRIC_EPSG).length
+
     merged = grid_country[["id"]].merge(grid_line[["id", "coast_length_meters"]], on="id", how="left").fillna(0)
     merged["with_coast"] = (merged["coast_length_meters"] > 0).astype(int)
     return merged
@@ -169,48 +137,50 @@ def process_country(iso, global_grid, global_shp, out_path, data_path):
     """Processes a single country's terrain and coastal data."""
     output_file = out_path / f"srtm_grid_data_{iso}.csv"
     if output_file.exists():
-        return logging.info(f"Skipping {iso}: Output exists.")
+        logger.info(f"Skipping {iso}: Output exists.")
+        return
 
-    logging.info(f"Processing {iso}...")
-    
-    # Subset data to country level once to save memory in parallel workers
+    logger.info(f"Processing {iso}...")
+
     grid_c = global_grid[global_grid.iso3 == iso].copy()
     shp_c = global_shp[global_shp.GID_0 == iso].copy()
-    
-    if grid_c.empty:
-        return logging.warning(f"No grid data for {iso}.")
 
-    # Identify and validate tiles
+    if grid_c.empty:
+        logger.warning(f"No grid data for {iso}.")
+        return
+
     extent = grid_c.total_bounds
     tiles = get_overlap_files(extent)
     tile_paths = [data_path / t for t in tiles if (data_path / t).exists()]
 
     if not tile_paths:
-        logging.warning(f"No tiles found for {iso}.")
+        logger.warning(f"No tiles found for {iso}.")
         df_terrain = grid_c[["id", "geometry"]].copy()
-        for col in ["mean_elev", "mean_slope", "mean_rug"]: df_terrain[col] = np.nan
+        for col in ["mean_elev", "mean_slope", "mean_rug"]:
+            df_terrain[col] = np.nan
     else:
-        # Process tiles in parallel. Limit Pool size to prevent CPU overload.
-        workers = min(len(tile_paths), cpu_count() // 2)
+        workers = max(1, min(len(tile_paths), cpu_count() // 2))
         with Pool(processes=workers) as pool:
             tile_results = pool.starmap(run_terrain_task, [(grid_c, p) for p in tile_paths])
-        
-        # Merge tile results (averaging overlaps)
-        df_terrain_raw = pd.concat([r for r in tile_results if r is not None])
-        df_terrain_avg = df_terrain_raw.groupby("id").mean().reset_index()
-        df_terrain = grid_c[["id", "geometry"]].merge(df_terrain_avg, on="id", how="left")
-        
-        # Interpolate missing values (e.g. border cells or small gaps)
-        df_terrain = spatial_interpolation(df_terrain, ["mean_elev", "mean_slope", "mean_rug"])
 
-    # Coastal processing
+        valid_results = [r for r in tile_results if r is not None]
+        if valid_results:
+            df_terrain_raw = pd.concat(valid_results)
+            df_terrain_avg = df_terrain_raw.groupby("id").mean().reset_index()
+            df_terrain = grid_c[["id", "geometry"]].merge(df_terrain_avg, on="id", how="left")
+            df_terrain = spatial_interpolation(df_terrain, ["mean_elev", "mean_slope", "mean_rug"])
+        else:
+            df_terrain = grid_c[["id", "geometry"]].copy()
+            for col in ["mean_elev", "mean_slope", "mean_rug"]:
+                df_terrain[col] = np.nan
+
     df_coast = get_coast_features(shp_c, grid_c)
-    
-    # Final assembly
+
     final = df_terrain.merge(df_coast, on="id", how="left")
     final["iso3"] = iso
     final.drop(columns="geometry", errors="ignore").to_csv(output_file, index=False)
-    logging.info(f"Completed {iso}.")
+    logger.info(f"Completed {iso}.")
+
 
 def process_all_srtm():
     """Entry point for global SRTM processing."""
@@ -218,29 +188,35 @@ def process_all_srtm():
     data_path = INPUT_DIR / "SRTM" / "tiles"
     out_path.mkdir(parents=True, exist_ok=True)
 
-    logging.info("Loading global datasets...")
+    logger.info("Loading global datasets...")
     grid = gpd.read_file(INPUT_DIR / "GRID" / "merged" / "global_grid_land_overlap.gpkg")
-    grid["geometry"] = grid["geometry"].apply(adjust_longitude)
+
+    # Only wrap polygons that actually carry longitudes > 180 — leave the rest
+    # untouched so they continue to align with the [-180, 180] SRTM tiles.
+    needs_wrap = grid.geometry.apply(
+        lambda g: any(lon > 180 for lon, _ in g.exterior.coords) if g is not None else False
+    )
+    if needs_wrap.any():
+        logger.info(f"Wrapping longitudes for {int(needs_wrap.sum())} antimeridian-crossing polygons.")
+        grid.loc[needs_wrap, "geometry"] = grid.loc[needs_wrap, "geometry"].apply(adjust_longitude)
     grid["GID_0"] = grid["iso3"]
 
     shp = gpd.read_file(INPUT_DIR / "SHP" / "gadm_410.gdb")
-    
-    # Iterate countries sequentially to prevent process explosion
-    # Multi-processing is handled at the tile level within each country
-    ISO3_LIST = grid.iso3.unique()
-    for iso in ISO3_LIST:
-        if iso in grid.iso3.unique():
-            try:
-                process_country(iso, grid, shp, out_path, data_path)
-            except Exception as e:
-                logging.error(f"Failed to process {iso}: {e}")
 
-    # Compile global results
-    logging.info("Compiling global SRTM dataset...")
+    for iso in grid.iso3.unique():
+        try:
+            process_country(iso, grid, shp, out_path, data_path)
+        except Exception as e:
+            logger.error(f"Failed to process {iso}: {e}", exc_info=True)
+
+    logger.info("Compiling global SRTM dataset...")
     all_csvs = list(out_path.glob("srtm_grid_data_*.csv"))
     global_df = pd.concat([pd.read_csv(f) for f in all_csvs], ignore_index=True)
     global_df.to_csv(out_path / "global_srtm_grid_data.csv", index=False)
-    logging.info("Global SRTM processing complete.")
+    logger.info("Global SRTM processing complete.")
+
 
 if __name__ == "__main__":
+    from src.utils.logging_setup import configure_logging
+    configure_logging()
     process_all_srtm()

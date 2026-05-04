@@ -1,6 +1,11 @@
-import pandas as pd
+import logging
+
 import geopandas as gpd
-from src.config import INPUT_DIR, OUTPUT_DIR, ISO3_LIST
+import pandas as pd
+
+from src.config import INPUT_DIR, ISO3_LIST
+
+logger = logging.getLogger(__name__)
 
 def group_shp(gdf_subset):
     """Aggregates geometries based on GID hierarchy using unary_union."""
@@ -19,12 +24,12 @@ def process_gadm_adm2():
     Creates a unified global ADM2-level shapefile for the study countries.
     Falls back to ADM1 for countries where ADM2 is unavailable.
     """
-    print("Processing GADM to unified sub-national levels...")
+    logger.info("Processing GADM to unified sub-national levels...")
     raw_path = INPUT_DIR / "SHP" / "gadm_410.gdb"
     out_path = INPUT_DIR / "SHP" / "global_shapefile_GID_adm2.gpkg"
-    
+
     if not raw_path.exists():
-        print("Error: Raw GADM file not found.")
+        logger.error(f"Raw GADM file not found at {raw_path}.")
         return
 
     # Load the global dataset (ADM0 layer usually contains all sub-units in GeoPackages)
@@ -51,7 +56,10 @@ def process_gadm_adm2():
     final_gdf = final_gdf.set_crs("EPSG:4326", allow_override=True)
     
     final_gdf.to_file(out_path, driver="GPKG")
-    print(f"Unified GID ADM2 shapefile saved to {out_path}")
+    logger.info(f"Unified GID ADM2 shapefile saved to {out_path}")
+
 
 if __name__ == "__main__":
+    from src.utils.logging_setup import configure_logging
+    configure_logging()
     process_gadm_adm2()
