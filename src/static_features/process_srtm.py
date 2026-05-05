@@ -76,6 +76,41 @@ def get_overlap_files(extent):
             overlapping_files.append(file)
     return overlapping_files
 
+
+# Select country SRTM tiles for countries with grid cells
+def get_country_tiles(grid):
+    country_tiles  = []
+    for iso in grid.iso3.unique():
+        # Particular cases
+        if iso == 'USA':
+            usa_extent_1 = [172, 18.9, 180, 72.7]
+            usa_extent_2 = [-180, 18.9, -67, 72.7]
+            tiles = get_overlap_files(usa_extent_1) + get_overlap_files(usa_extent_2)
+        elif iso == 'FJI':
+            fji_extent_1 = [176.8, -21.1, 180, -12.4] 
+            fji_extent_2 = [-180, -21.1, -178, -12.4] 
+            tiles = get_overlap_files(fji_extent_1) + get_overlap_files(fji_extent_2)
+        elif iso == 'NZL':
+            nzl_extent_1 = [165.8, -52.7, 180, -29.2]
+            nzl_extent_2 = [-180, -52.7, -176, -29.2]
+            tiles = get_overlap_files(nzl_extent_1) + get_overlap_files(nzl_extent_2)
+        elif iso == 'KIR':
+            kir_extent_1 = [176,  -17.852114,  180,    4.699492]
+            kir_extent_2 = [-180,  -17.852114,  -174,    4.699492]
+            tiles = get_overlap_files(kir_extent_1) + get_overlap_files(kir_extent_2)
+        elif iso == 'RUS':
+            rus_extent_1 = [25, 41.18886566,  180,   81.856247]
+            rus_extent_2 = [-180, 41.18886566,  -170,   81.856247]
+            tiles = get_overlap_files(rus_extent_1) + get_overlap_files(rus_extent_2)
+        # Regular cases
+        else:
+            country_grid = grid[grid.iso3==iso]
+            extent = country_grid.total_bounds
+            tiles =  get_overlap_files(extent)
+        
+        country_tiles.append({'iso3': iso, 'tiles': tiles })
+    return pd.DataFrame(country_tiles)
+
 # -------------------------------------------------------------------
 # Terrain Analysis
 # -------------------------------------------------------------------
@@ -165,7 +200,8 @@ def get_coast_features(shp_country, grid_country):
 # Execution Logic
 # -------------------------------------------------------------------
 
-def process_country(iso, global_grid, global_shp, out_path, data_path):
+
+def process_country(iso, global_grid, global_shp, tiles_df, out_path, data_path):
     """Processes a single country's terrain and coastal data."""
     output_file = out_path / f"srtm_grid_data_{iso}.csv"
     if output_file.exists():
@@ -180,15 +216,23 @@ def process_country(iso, global_grid, global_shp, out_path, data_path):
     if grid_c.empty:
         return logging.warning(f"No grid data for {iso}.")
 
-    # Identify and validate tiles
-    extent = grid_c.total_bounds
-    tiles = get_overlap_files(extent)
+    # Retrieve pre-calculated tiles from tiles_df ---
+    iso_tiles_data = tiles_df[tiles_df['iso3'] == iso]
+    
+    if iso_tiles_data.empty:
+        tiles = []
+    else:
+        # Extract the list of tiles for this specific ISO
+        tiles = iso_tiles_data['tiles'].values[0] 
+
+    # Validate tiles against the filesystem
     tile_paths = [data_path / t for t in tiles if (data_path / t).exists()]
 
     if not tile_paths:
         logging.warning(f"No tiles found for {iso}.")
         df_terrain = grid_c[["id", "geometry"]].copy()
-        for col in ["mean_elev", "mean_slope", "mean_rug"]: df_terrain[col] = np.nan
+        for col in ["mean_elev", "mean_slope", "mean_rug"]: 
+            df_terrain[col] = np.nan
     else:
         # Process tiles in parallel. Limit Pool size to prevent CPU overload.
         workers = min(len(tile_paths), cpu_count() // 2)
@@ -212,6 +256,7 @@ def process_country(iso, global_grid, global_shp, out_path, data_path):
     final.drop(columns="geometry", errors="ignore").to_csv(output_file, index=False)
     logging.info(f"Completed {iso}.")
 
+
 def process_all_srtm():
     """Entry point for global SRTM processing."""
     out_path = OUTPUT_DIR / "SRTM" / "grid_data"
@@ -225,22 +270,30 @@ def process_all_srtm():
 
     shp = gpd.read_file(INPUT_DIR / "SHP" / "gadm_410.gdb")
     
+    # Pre-calculate country tiles to handle antimeridian cases 
+    logging.info("Pre-calculating SRTM tile overlaps for all countries...")
+    tiles_df = get_country_tiles(grid)
+    
     # Iterate countries sequentially to prevent process explosion
     # Multi-processing is handled at the tile level within each country
     ISO3_LIST = grid.iso3.unique()
     for iso in ISO3_LIST:
-        if iso in grid.iso3.unique():
-            try:
-                process_country(iso, grid, shp, out_path, data_path)
-            except Exception as e:
-                logging.error(f"Failed to process {iso}: {e}")
+        try:
+            # Pass tiles_df as an argument to the modified process_country function
+            process_country(iso, grid, shp, tiles_df, out_path, data_path)
+        except Exception as e:
+            logging.error(f"Failed to process {iso}: {e}")
 
     # Compile global results
     logging.info("Compiling global SRTM dataset...")
     all_csvs = list(out_path.glob("srtm_grid_data_*.csv"))
-    global_df = pd.concat([pd.read_csv(f) for f in all_csvs], ignore_index=True)
-    global_df.to_csv(out_path / "global_srtm_grid_data.csv", index=False)
-    logging.info("Global SRTM processing complete.")
+    
+    if all_csvs:
+        global_df = pd.concat([pd.read_csv(f) for f in all_csvs], ignore_index=True)
+        global_df.to_csv(out_path / "global_srtm_grid_data.csv", index=False)
+        logging.info("Global SRTM processing complete.")
+    else:
+        logging.warning("No CSV files found to compile. Check for processing errors.")
 
 if __name__ == "__main__":
     process_all_srtm()

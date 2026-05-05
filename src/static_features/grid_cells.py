@@ -30,15 +30,14 @@ def filter_grid_by_land(grid_gdf, shp_path):
     # Load the global GeoPackage downloaded by general_collector.py
     world = gpd.read_file(shp_path)
     
-    # Filter for countries in the study consideration list
-    world = world[world['GID_0'].isin(ISO3_LIST)]
     
     print("Performing spatial join (filtering grid to land overlap)...")
     grid_land = gpd.sjoin(grid_gdf, world[['GID_0', 'geometry']], how="inner", predicate="intersects")
     
     # Clean up and add unique IDs
     grid_land = grid_land.drop(columns=["index_right"])
-    grid_land = grid_land.rename(columns={"GID_0": "iso3"})
+    grid_land["iso3"] = grid_land["GID_0"].copy()
+    # grid_land = grid_land.rename(columns={"GID_0": "iso3"})
     
     # Generate the ID formatted as iso3_xxxxx (e.g., PHL_00000)
     # cumcount() creates a 0-indexed counter for each iso3 group
