@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 from shapely.geometry import box
-from src.config import INPUT_DIR, ISO3_LIST
+from src.config import INPUT_DIR, resolve_iso3_list
 
 def generate_global_grid(res=0.1):
     """
@@ -27,12 +27,19 @@ def filter_grid_by_land(grid_gdf, shp_path):
     Filters by the study's ISO3 list to optimize processing.
     """
     print("Loading GADM boundaries for land-overlap filtering...")
-    # Load the global GeoPackage downloaded by general_collector.py
     world = gpd.read_file(shp_path)
-    
-    
+
+    # Dissolve by country so each grid cell matches at most once per country.
+    # Without this, a cell intersecting multiple GADM sub-polygons of the same
+    # country (islands, admin divisions) produces duplicate rows with different IDs.
+    print("Dissolving GADM boundaries by country...")
+    world_dissolved = world[['GID_0', 'geometry']].dissolve(by='GID_0').reset_index()
+
+    iso3_list = resolve_iso3_list()
+    world_dissolved = world_dissolved[world_dissolved['GID_0'].isin(iso3_list)]
+
     print("Performing spatial join (filtering grid to land overlap)...")
-    grid_land = gpd.sjoin(grid_gdf, world[['GID_0', 'geometry']], how="inner", predicate="intersects")
+    grid_land = gpd.sjoin(grid_gdf, world_dissolved[['GID_0', 'geometry']], how="inner", predicate="intersects")
     
     # Clean up and add unique IDs
     grid_land = grid_land.drop(columns=["index_right"])

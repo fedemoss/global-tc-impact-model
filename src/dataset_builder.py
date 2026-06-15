@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 from pathlib import Path
-from src.config import INPUT_DIR, OUTPUT_DIR, ISO3_LIST
+from src.config import INPUT_DIR, OUTPUT_DIR, resolve_iso3_list
 
 def load_static_features(iso3):
     """
@@ -127,7 +127,7 @@ def compile_global_dataset():
     df_impact_master = pd.read_csv(impact_path)
 
     master_dataset = []
-    for iso3 in ISO3_LIST:
+    for iso3 in resolve_iso3_list():
         df_country = build_country_dataset(iso3, df_meta, df_impact_master)
         if df_country is not None and not df_country.empty:
             master_dataset.append(df_country)

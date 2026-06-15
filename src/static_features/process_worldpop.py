@@ -4,7 +4,7 @@ import geopandas as gpd
 import rasterio
 from rasterio.mask import mask
 from shapely.geometry import Polygon
-from src.config import INPUT_DIR, OUTPUT_DIR, ISO3_LIST
+from src.config import INPUT_DIR, OUTPUT_DIR, resolve_iso3_list
 
 import logging
 logging.basicConfig(level=logging.ERROR, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -53,7 +53,7 @@ def process_all_worldpop():
     grid["GID_0"] = grid["iso3"] 
     grid["geometry"] = grid["geometry"].apply(adjust_longitude)
 
-    valid_iso3_list = [iso for iso in ISO3_LIST if iso in grid.iso3.unique()]
+    valid_iso3_list = [iso for iso in resolve_iso3_list() if iso in grid.iso3.unique()]
 
     with ThreadPoolExecutor(max_workers=4) as executor:
         futures = [executor.submit(process_country, iso, grid, raster_path, out_folder) for iso in valid_iso3_list]

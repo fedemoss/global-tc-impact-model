@@ -38,12 +38,23 @@ NON_CONTEMPLATED_FEATURES = [
 ]
 
 # ISO3 Country List
-ISO3_LIST = [
-    "ATG", "AUS", "BGD", "CAN", "CHN", "COL", "CRI", "CUB", "DJI", "DOM",
-    "FJI", "GLP", "GTM", "HND", "HTI", "IDN", "IND", "JPN", "KHM", "BRA",
-    "KOR", "LAO", "LKA", "MDG", "MEX", "MMR", "MOZ", "MTQ", "NCL", "NIC",
-    "NZL", "OMN", "PAK", "PAN", "PHL", "PNG", "PRK", "PRT", "SLV", "SOM",
-    "THA", "TLS", "TWN", "TZA", "USA", "VEN", "VNM", "VUT", "YEM", "ZAF",
-    "IRN", "MWI", "ZWE", "WSM", "TON", "BHS", "SLB", "FSM", "PYF", "BLZ",
-    "BRB", "GRD", "MUS"
-]
+# ISO3_LIST = [
+#     "ATG", "AUS", "BGD", "CAN", "CHN", "COL", "CRI", "CUB", "DJI", "DOM",
+#     "FJI", "GLP", "GTM", "HND", "HTI", "IDN", "IND", "JPN", "KHM", "BRA",
+#     "KOR", "LAO", "LKA", "MDG", "MEX", "MMR", "MOZ", "MTQ", "NCL", "NIC",
+#     "NZL", "OMN", "PAK", "PAN", "PHL", "PNG", "PRK", "PRT", "SLV", "SOM",
+#     "THA", "TLS", "TWN", "TZA", "USA", "VEN", "VNM", "VUT", "YEM", "ZAF",
+#     "IRN", "MWI", "ZWE", "WSM", "TON", "BHS", "SLB", "FSM", "PYF", "BLZ",
+#     "BRB", "GRD", "MUS"
+# ]
+
+ISO3_LIST = ["ATG"]
+
+def resolve_iso3_list():
+    """Return ISO3_LIST if set, otherwise all GID_0 codes from GADM."""
+    if ISO3_LIST is not None:
+        return ISO3_LIST
+    import geopandas as gpd
+    gadm_path = INPUT_DIR / "SHP" / "gadm_410.gdb"
+    world = gpd.read_file(gadm_path, ignore_geometry=True)
+    return sorted(world["GID_0"].dropna().unique().tolist())

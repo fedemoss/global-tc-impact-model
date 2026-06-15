@@ -32,11 +32,6 @@ def download_file(url, out_path, stream=True, verify=True):
             out_path.unlink()
         return False
 
-import zipfile
-import requests
-from bs4 import BeautifulSoup
-from urllib.parse import urljoin
-
 def collect_gadm():
     """Scrapes gadm.org for the latest global geodatabase, downloads, and unzips it."""
     print("Scraping GADM for geodatabase link...")
@@ -84,7 +79,7 @@ def collect_gadm():
     else:
         print("No geodatabase link found on GADM page.")
 
-def collect_guil():
+def collect_gaul():
     """
     Downloads the GAUL 2015 ADM2 shapefile required for 
     geolocating EM-DAT administrative units.
@@ -181,7 +176,7 @@ def collect_srtm():
 def download_all_public_data():
     """Main orchestrator for collecting all public hazard and spatial data."""
     collect_gadm()
-    collect_guil()
+    # collect_gaul()
     collect_worldpop()
     collect_landslide()
     collect_storm_surge()

@@ -62,11 +62,25 @@ pip install -r requirements.txt
     * `DisNo.`: EM-DAT Disaster Number.
     * `Total Affected`: The target variable (Total number of people affected).
     * `Total Deaths`: Secondary target/tracking variable.
-    * `Admin Units`: JSON-formatted string of affected administrative regions (used for spatial expansion).
+    * `Admin Units`: JSON-formatted string of affected administrative regions using GAUL 2014-2015 dataset(used for spatial expansion).
 
 **Note: we leave to the user the "sid" and "Disno." matching of storms. This involves manual labeling based TC names, locations and dates on top of classic fuzzy-matching techniques or (alternatively) the use of LLM matching approaches.** 
 
-* **NASA PPS (Precipitation)**: To access GPM-IMERG rainfall data, register a free account at [NASA PPS](https://pps.gsfc.nasa.gov/). Once registered, configure your credentials in `src/collectors/pps_collector.py`.
+* **GAUL 2014-2015 Dataset (Administrative Boundaries)**: This spatial dataset is required to map the EM-DAT `Admin Units` to physical geometries. Because official distribution has been restricted, the only reliable way to access this dataset is through **Google Earth Engine (GEE)**. 
+    * **How to obtain**: 
+      1. Register for a free [Google Earth Engine account](https://earthengine.google.com/).
+      2. Locate the GAUL dataset in the GEE Data Catalog (e.g., `FAO/GAUL/2015/level2`)
+      3. Export the dataset as a GeoJSON or Shapefile using the GEE Code Editor or the Python API. 
+    * **Placement**: Once exported, place the spatial file in your data directory as `data/input/SHP/global_shapefile_GAUL_adm2.gpkg`.
+
+* **NASA PPS (Precipitation)**: To access GPM-IMERG rainfall data, register a free account at [NASA PPS](https://registration.pps.eosdis.nasa.gov/registration/). Once registration is complete, PPS will use your **email address (lower-cased) as both your username and password**.
+
+    Create a `.env` file at the project root (already listed in `.gitignore`) with your credentials:
+    ```
+    NASA_PPS_USERNAME=your_email@example.com
+    NASA_PPS_PASSWORD=your_email@example.com
+    ```
+    `process_rain_features.py` loads this file automatically at startup via `_load_dotenv()`. The PPS collector downloads GPM-IMERG Final Run GeoTIFF files for a ±2-day window around each storm's landfall date and stores them under `data/input/gpm_data/{typhoon_name}/`.
 
 * **SHDI Index (Vulnerability)**: Download this dataset manually from *https://globaldatalab.org/shdi/download/shdi/* and put it in under `/data/SHDI/GDL-Subnational-HDI-data.csv` (requires logging to GlobalDataLab)
 

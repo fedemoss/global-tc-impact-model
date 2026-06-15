@@ -5,7 +5,7 @@ import rioxarray as rxr
 from rasterstats import zonal_stats
 from shapely.geometry import Polygon
 from concurrent.futures import ProcessPoolExecutor
-from src.config import INPUT_DIR, OUTPUT_DIR, ISO3_LIST
+from src.config import INPUT_DIR, OUTPUT_DIR, resolve_iso3_list
 
 def adjust_longitude(polygon):
     coords = list(polygon.exterior.coords)
@@ -61,7 +61,7 @@ def process_all_jrc():
     out_dir = OUTPUT_DIR / "JRC" / "grid_data"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    valid_iso3_list = [iso for iso in ISO3_LIST if iso in grid_transformed.iso3.unique()]
+    valid_iso3_list = [iso for iso in resolve_iso3_list() if iso in grid_transformed.iso3.unique()]
 
     for iso3 in valid_iso3_list:
         calculate_urban_rural_water(grid_transformed[grid_transformed.iso3 == iso3], src_wgs84, out_dir, iso3)

@@ -1,6 +1,6 @@
 import pandas as pd
 import geopandas as gpd
-from src.config import INPUT_DIR, OUTPUT_DIR, ISO3_LIST
+from src.config import INPUT_DIR, OUTPUT_DIR, resolve_iso3_list
 
 def group_shp(gdf_subset):
     """Aggregates geometries based on GID hierarchy using unary_union."""
@@ -32,7 +32,7 @@ def process_gadm_adm2():
     global_shp = gpd.read_file(raw_path)
     
     # Filter for countries in the study list
-    global_shp = global_shp[global_shp["GID_0"].isin(ISO3_LIST)]
+    global_shp = global_shp[global_shp["GID_0"].isin(resolve_iso3_list())]
     
     # 1. Process ADM2 Data
     # Keep rows where GID_2 is populated

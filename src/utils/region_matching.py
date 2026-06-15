@@ -14,8 +14,8 @@ def create_un_regions_csv():
     if out_path.exists(): 
         return pd.read_csv(out_path)
     
-    from src.config import ISO3_LIST
-    df = pd.DataFrame({"iso3": ISO3_LIST})
+    from src.config import resolve_iso3_list
+    df = pd.DataFrame({"iso3": resolve_iso3_list()})
     df['region'] = coco.convert(names=df['iso3'], to='UNregion')
     df['continent'] = coco.convert(names=df['iso3'], to='continent')
     

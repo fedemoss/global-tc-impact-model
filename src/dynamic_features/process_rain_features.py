@@ -10,7 +10,22 @@ import pandas as pd
 import rioxarray as rxr
 from shapely.geometry import Polygon
 
-from src.config import INPUT_DIR, OUTPUT_DIR, ISO3_LIST
+from src.config import INPUT_DIR, OUTPUT_DIR, resolve_iso3_list
+
+def _load_dotenv():
+    """Load KEY=VALUE pairs from .env at the project root into os.environ (no-op if already set)."""
+    env_path = Path(__file__).resolve().parents[2] / ".env"
+    if not env_path.exists():
+        return
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            os.environ.setdefault(key.strip(), val.strip())
+
+_load_dotenv()
 
 # -------------------------------------------------------------------
 # Configuration & Logging
@@ -132,27 +147,76 @@ def process_country_rainfall(iso3, metadata_global, grid_global, out_dir):
         if df_rainfall_total:
             pd.concat(df_rainfall_total).to_csv(out_file, index=False)
 
+def _load_metadata_global():
+    """Load and concatenate all per-country metadata files from the IBTRACS output directory."""
+    meta_dir = OUTPUT_DIR / "IBTRACS" / "standard"
+    meta_files = list(meta_dir.glob("metadata_*.csv"))
+    if not meta_files:
+        raise FileNotFoundError(f"No metadata files found in {meta_dir}. Run process_wind_features first.")
+    df = pd.concat([pd.read_csv(f) for f in meta_files], ignore_index=True)
+    df = df.drop(columns=["DisNo."], errors="ignore").drop_duplicates()
+    df["iso3"] = df["GID_0"]
+    return df
+
+def _load_grid_global():
+    """Load the land-overlap grid and apply longitude adjustments."""
+    grid = gpd.read_file(INPUT_DIR / "GRID" / "merged" / "global_grid_land_overlap.gpkg")
+    grid["iso3"] = grid.GID_0
+    grid["geometry"] = grid["geometry"].apply(adjust_longitude)
+    return grid
+
+def run_single_storm(iso3, sid):
+    """Download GPM data (if absent) and compute rainfall features for one storm."""
+    from src.collectors.pps_collector import download_gpm_late_run
+
+    meta_file = OUTPUT_DIR / "IBTRACS" / "standard" / f"metadata_{iso3}.csv"
+    if not meta_file.exists():
+        raise FileNotFoundError(f"Metadata not found for {iso3}. Run process_wind_features first.")
+
+    df_meta = pd.read_csv(meta_file)
+    storm = df_meta[df_meta.sid == sid]
+    if storm.empty:
+        raise ValueError(f"SID {sid} not found in metadata for {iso3}.")
+
+    typhoon_name = storm.iloc[0]["typhoon"]
+    date_list = get_date_list(df_meta, sid, days_to_landfall=2)
+
+    local_gpm_dir = INPUT_DIR / "gpm_data" / typhoon_name
+    if not local_gpm_dir.exists() or not list(local_gpm_dir.glob("*.tif")):
+        logging.info(f"Downloading GPM data for {typhoon_name} ({date_list[0]} – {date_list[-1]})...")
+        download_gpm_late_run(
+            start_date=pd.to_datetime(date_list[0]),
+            end_date=pd.to_datetime(date_list[-1]),
+            typhoon_name=typhoon_name,
+        )
+
+    grid_global = _load_grid_global()
+    out_dir = OUTPUT_DIR / "PPS"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    df_rainfall = create_rainfall_dataset(grid_global, df_meta, iso3, sid, typhoon_name)
+    df_rainfall = df_rainfall.fillna(0)
+    out_file = out_dir / f"rainfall_data_{iso3}_{sid}.csv"
+    df_rainfall.to_csv(out_file, index=False)
+    logging.info(f"Saved: {out_file}")
+    return df_rainfall
+
 def generate_all_rain_features(max_workers=4):
     out_dir = OUTPUT_DIR / "PPS"
     out_dir.mkdir(parents=True, exist_ok=True)
-    
+
     print("Loading global grid and applying longitude adjustments...")
-    grid_global = gpd.read_file(INPUT_DIR / "GRID" / "merged" / "global_grid_land_overlap.gpkg")
-    grid_global["iso3"] = grid_global.GID_0
-    grid_global["geometry"] = grid_global["geometry"].apply(adjust_longitude)
+    grid_global = _load_grid_global()
 
     print("Loading global metadata...")
-    metadata_global = pd.read_csv(INPUT_DIR / "IBTRACS" / "merged" / "meta_data.csv")
-    metadata_global = metadata_global.drop("DisNo.", axis=1).drop_duplicates()
-    metadata_global["iso3"] = metadata_global.GID_0
+    metadata_global = _load_metadata_global()
 
-    # Filter global list to valid countries only
-    valid_iso3_list = [iso3 for iso3 in ISO3_LIST if iso3 in metadata_global["iso3"].unique()]
-    
+    valid_iso3_list = [iso3 for iso3 in resolve_iso3_list() if iso3 in metadata_global["iso3"].unique()]
+
     print(f"Starting rainfall processing for {len(valid_iso3_list)} countries...")
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(process_country_rainfall, iso3, metadata_global, grid_global, out_dir): iso3 
+            executor.submit(process_country_rainfall, iso3, metadata_global, grid_global, out_dir): iso3
             for iso3 in valid_iso3_list
         }
         for future in as_completed(futures):
@@ -164,4 +228,4 @@ def generate_all_rain_features(max_workers=4):
                 print(f"Error processing {iso3}: {e}")
 
 if __name__ == "__main__":
-    generate_all_rain_features(max_workers=4)
+    run_single_storm(iso3="ATG", sid="2008287N15291")
