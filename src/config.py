@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import geopandas as gpd
 
 # Set the project base directory
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -17,7 +18,7 @@ LANDSLIDE_URL = "https://datacatalogfiles.worldbank.org/ddh-published/0037584/DR
 STORM_SURGE_URL = "https://data.4tu.nl/file/4e291b8f-a37e-4378-8ca6-954a44fdc8fb/1263247c-4427-40eb-b497-a79f72caa267"
 JRC_SMOD_URL = "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL/GHS_SMOD_GLOBE_R2022A/GHS_SMOD_P2025_GLOBE_R2022A_54009_1000/V1-0/GHS_SMOD_P2025_GLOBE_R2022A_54009_1000_V1_0.zip"
 SRTM_BASE_URL = "https://srtm.csi.cgiar.org/wp-content/uploads/files/srtm_5x5/TIFF/"
-NASA_PPS_BASE_URL = "https://jsimpsonhttps.pps.eosdis.nasa.gov/imerg/gis/"
+NASA_PPS_BASE_URL = "https://arthurhouhttps.pps.eosdis.nasa.gov/gpmdata/"
 FLOOD_RISK_URL = "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/CEMS-GLOFAS/flood_hazard/RP10/"
 SHDI_URL = "https://globaldatalab.org/shdi/download/shdi/?levels=4&interpolation=0&extrapolation=0"
 
@@ -54,7 +55,6 @@ def resolve_iso3_list():
     """Return ISO3_LIST if set, otherwise all GID_0 codes from GADM."""
     if ISO3_LIST is not None:
         return ISO3_LIST
-    import geopandas as gpd
     gadm_path = INPUT_DIR / "SHP" / "gadm_410.gdb"
     world = gpd.read_file(gadm_path, ignore_geometry=True)
     return sorted(world["GID_0"].dropna().unique().tolist())

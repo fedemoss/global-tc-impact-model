@@ -80,7 +80,11 @@ pip install -r requirements.txt
     NASA_PPS_USERNAME=your_email@example.com
     NASA_PPS_PASSWORD=your_email@example.com
     ```
-    `process_rain_features.py` loads this file automatically at startup via `_load_dotenv()`. The PPS collector downloads GPM-IMERG Final Run GeoTIFF files for a ±2-day window around each storm's landfall date and stores them under `data/input/gpm_data/{typhoon_name}/`.
+    `process_rain_features.py` loads this file automatically at startup via `_load_dotenv()`.
+
+    The collector (`pps_collector.py`) pulls from the **`arthurhouhttps` near-real-time mirror**, which works with a standard PPS registration — the `jsimpsonhttps` production mirror requires separately-approved elevated access that most accounts don't have. For each storm it downloads the half-hourly **IMERG Late** GIS accumulation product (`3B-HHR-GIS`, extracted from its zip bundle) covering a ±2-day window around landfall, with automatic retry/backoff on transient connection errors, and stores the extracted GeoTIFFs under `data/input/gpm_data/{typhoon_name}/`.
+
+    `rainfall_max_24h` is computed by summing the half-hourly accumulation values into a daily total (mm) per grid cell for each of the 5 days in the ±2-day window, then taking the max across those daily totals — i.e. the maximum single-day accumulated rainfall near landfall, not a rain-rate average.
 
 * **SHDI Index (Vulnerability)**: Download this dataset manually from *https://globaldatalab.org/shdi/download/shdi/* and put it in under `/data/SHDI/GDL-Subnational-HDI-data.csv` (requires logging to GlobalDataLab)
 

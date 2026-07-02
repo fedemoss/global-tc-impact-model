@@ -5,7 +5,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import geopandas as gpd
-import numpy as np
 import pandas as pd
 import rioxarray as rxr
 from shapely.geometry import Polygon
@@ -42,6 +41,9 @@ logging.basicConfig(
     ]
 )
 
+IMERG_SCALE_FACTOR = 10  # Stored value = mm * 10 (see TIFFTAG_IMAGEDESCRIPTION)
+IMERG_FILL_VALUE = 29999
+
 def get_date_list(df_meta, sid, days_to_landfall=2):
     metadata = df_meta.loc[df_meta.sid == sid].copy()
     metadata.loc[:, "landfalldate"] = pd.to_datetime(metadata["landfalldate"])
@@ -57,47 +59,57 @@ def adjust_longitude(polygon):
             coords[i] = (lon - 360, lat)
     return Polygon(coords)
 
+def _extract_grid_values(da_in, grid):
+    """Read one pixel value (converted to mm) per grid cell, masking the IMERG fill value."""
+    values = {}
+    for _, row in grid.iterrows():
+        minx, miny, maxx, maxy = row["bbox"]
+        da_box = da_in.sel(x=slice(minx, maxx), y=slice(maxy, miny))
+        if da_box.size > 0:
+            raw_value = float(da_box.values[0, 0])
+            if raw_value < IMERG_FILL_VALUE:
+                values[row["id"]] = raw_value / IMERG_SCALE_FACTOR
+    return values
+
 def create_rainfall_dataset(grid_global, df_meta, iso3, sid, typhoon_name):
     """
-    Reads local TIFF files downloaded by the PPS collector to generate grid rainfall features.
+    Reads local half-hourly IMERG accumulation TIFFs downloaded by the PPS collector,
+    sums them into a daily accumulated total (mm) per grid cell, and takes the max
+    daily total across the +/- days_to_landfall window.
     """
     date_list = get_date_list(df_meta=df_meta, sid=sid, days_to_landfall=2)
     local_gpm_dir = INPUT_DIR / "gpm_data" / typhoon_name
-    
-    raster_files = []
-    found_dates = []
-    
-    for date_str in date_list:
-        if not local_gpm_dir.exists():
-            continue
-            
-        for file_path in local_gpm_dir.glob(f"*{date_str}*.tif"):
-            raster_file = rxr.open_rasterio(file_path, masked=True, chunks=True)
-            raster_file = raster_file.rio.write_crs(4326).squeeze(drop=True)
-            raster_files.append(raster_file)
-            found_dates.append(date_str)
-
-    if not raster_files:
-        raise FileNotFoundError(f"No local GPM data found for {typhoon_name} ({sid}) in {local_gpm_dir}")
 
     grid = grid_global[grid_global.iso3 == iso3].copy()
     grid["bbox"] = grid.geometry.apply(lambda geom: geom.bounds)
-    
+
     file_df = pd.DataFrame()
-    for i, da_in in enumerate(raster_files):
-        da_in = da_in.rio.write_crs(4326)
-        grid = grid.to_crs(da_in.rio.crs)
-        grid["mean"] = np.nan
+    for date_str in date_list:
+        if not local_gpm_dir.exists():
+            continue
 
-        for index, row in grid.iterrows():
-            minx, miny, maxx, maxy = row["bbox"]
-            da_box = da_in.sel(x=slice(minx, maxx), y=slice(miny, maxy))
-            if da_box.size > 0:
-                grid.at[index, "mean"] = da_box.values[0, 0]
+        day_files = sorted(local_gpm_dir.glob(f"*{date_str}*.tif"))
+        if not day_files:
+            continue
 
-        grid["date"] = found_dates[i]
-        grid["mean"] /= 10  # Convert to mm/hr
-        file_df = pd.concat([file_df, grid[["id", "iso3", "mean", "date"]]], axis=0)
+        daily_totals = pd.Series(0.0, index=grid["id"])
+        daily_has_data = pd.Series(False, index=grid["id"])
+        for file_path in day_files:
+            da_in = rxr.open_rasterio(file_path, masked=True, chunks=True)
+            da_in = da_in.rio.write_crs(4326).squeeze(drop=True)
+            grid = grid.to_crs(da_in.rio.crs)
+
+            for cell_id, accum_mm in _extract_grid_values(da_in, grid).items():
+                daily_totals[cell_id] += accum_mm
+                daily_has_data[cell_id] = True
+
+        day_grid = grid[["id", "iso3"]].copy()
+        day_grid["mean"] = daily_totals.reindex(grid["id"]).where(daily_has_data.reindex(grid["id"])).values
+        day_grid["date"] = date_str
+        file_df = pd.concat([file_df, day_grid], axis=0)
+
+    if file_df.empty:
+        raise FileNotFoundError(f"No local GPM data found for {typhoon_name} ({sid}) in {local_gpm_dir}")
 
     day_wide = pd.pivot(file_df, index=["id", "iso3"], columns=["date"], values=["mean"])
     day_wide.columns = day_wide.columns.droplevel(0)
@@ -181,14 +193,12 @@ def run_single_storm(iso3, sid):
     typhoon_name = storm.iloc[0]["typhoon"]
     date_list = get_date_list(df_meta, sid, days_to_landfall=2)
 
-    local_gpm_dir = INPUT_DIR / "gpm_data" / typhoon_name
-    if not local_gpm_dir.exists() or not list(local_gpm_dir.glob("*.tif")):
-        logging.info(f"Downloading GPM data for {typhoon_name} ({date_list[0]} – {date_list[-1]})...")
-        download_gpm_late_run(
-            start_date=pd.to_datetime(date_list[0]),
-            end_date=pd.to_datetime(date_list[-1]),
-            typhoon_name=typhoon_name,
-        )
+    logging.info(f"Downloading GPM data for {typhoon_name} ({date_list[0]} – {date_list[-1]})...")
+    download_gpm_late_run(
+        start_date=pd.to_datetime(date_list[0]),
+        end_date=pd.to_datetime(date_list[-1]),
+        typhoon_name=typhoon_name,
+    )
 
     grid_global = _load_grid_global()
     out_dir = OUTPUT_DIR / "PPS"
