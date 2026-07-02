@@ -27,10 +27,25 @@ def prepare_data(aggregate_to_adm1=False):
         .groupby(["DisNo.", "GID_0"]).mean()
         .reset_index(name="proportion_affected_gid1")
     )
-    events_to_consider_c3 = proportions[proportions.proportion_affected_gid1 < 1]["DisNo."].unique()
+    # Countries with no usable GID_1 breakdown (see dataset_builder.py's national
+    # fallback, e.g. ATG) are evaluated at GID_0 — a single "region" per event is
+    # always 100% affected by construction, so the proportion check doesn't apply.
+    n_gid1_units = df[df["level"] != "ADM0"].groupby("GID_0")["GID_1"].nunique()
+    single_region_countries = n_gid1_units[n_gid1_units <= 1].index
+    events_to_consider_c3 = proportions[
+        (proportions.proportion_affected_gid1 < 1) | (proportions.GID_0.isin(single_region_countries))
+    ]["DisNo."].unique()
     
     valid_events = list(set(events_to_consider_c1) & set(events_to_consider_c2) & set(events_to_consider_c3))
     df = df[df["DisNo."].isin(valid_events)].drop_duplicates()
+
+    # Add Date Info
+    emdat = pd.read_csv(INPUT_DIR / "EMDAT" / "emdat.csv")
+    emdat_red = emdat[["DisNo.", 'Start Year', 'Start Month', 'Start Day']].drop_duplicates()
+    emdat_red["Start Day"] = emdat_red["Start Day"].fillna(1)
+    emdat_red["date"] = pd.to_datetime(dict(year=emdat_red["Start Year"], month=emdat_red["Start Month"], day=emdat_red["Start Day"].astype(int)), errors="coerce")
+
+    df = df.merge(emdat_red[["DisNo.", "date"]], on="DisNo.", how="left").drop_duplicates()
 
     # Conditionally Aggregate to ADM1
     if aggregate_to_adm1:
@@ -44,17 +59,9 @@ def prepare_data(aggregate_to_adm1=False):
             "Total Affected": "max",
             "N_events_5_years": "max"
         })
-        
+
         df = df.groupby(["DisNo.", "sid", "level", "GID_0", "GID_1", "iso3", "cyclone_basin", "date"]).agg(agg_dict).reset_index()
 
-    # Add Date Info
-    emdat = pd.read_csv(INPUT_DIR / "EMDAT" / "emdat.csv")
-    emdat_red = emdat[["DisNo.", 'Start Year', 'Start Month', 'Start Day']].drop_duplicates()
-    emdat_red["Start Day"] = emdat_red["Start Day"].fillna(1)
-    emdat_red["date"] = pd.to_datetime(dict(year=emdat_red["Start Year"], month=emdat_red["Start Month"], day=emdat_red["Start Day"].astype(int)), errors="coerce")
-    
-    df = df.merge(emdat_red[["DisNo.", "date"]], on="DisNo.", how="left").drop_duplicates()
-    
     return df
 
 
