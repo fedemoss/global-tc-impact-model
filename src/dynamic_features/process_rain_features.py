@@ -211,6 +211,32 @@ def run_single_storm(iso3, sid):
     logging.info(f"Saved: {out_file}")
     return df_rainfall
 
+def _ensure_local_gpm_data(iso3, metadata_country):
+    """
+    Downloads any storm's GPM data that isn't already present locally.
+    Sequential by design: NASA PPS isn't built for many parallel download
+    sessions (single requests.Session, no cross-call rate-limit coordination
+    in pps_collector.py) — unlike the local-only processing below, which is
+    safe to run concurrently once the data is on disk.
+    """
+    from src.collectors.pps_collector import download_gpm_late_run
+
+    for _, row in metadata_country.drop_duplicates("sid").iterrows():
+        date_list = get_date_list(df_meta=metadata_country, sid=row.sid, days_to_landfall=2)
+        local_gpm_dir = INPUT_DIR / "gpm_data" / row.typhoon
+        already_local = local_gpm_dir.exists() and any(local_gpm_dir.glob(f"*{d}*.tif") for d in date_list)
+        if already_local:
+            continue
+        try:
+            logging.info(f"Downloading GPM data for {iso3}, {row.typhoon} ({row.sid})...")
+            download_gpm_late_run(
+                start_date=pd.to_datetime(date_list[0]),
+                end_date=pd.to_datetime(date_list[-1]),
+                typhoon_name=row.typhoon,
+            )
+        except Exception as e:
+            logging.error(f"Failed to download GPM data for {iso3}, {row.sid} ({row.typhoon}): {e}")
+
 def generate_all_rain_features(max_workers=4):
     out_dir = OUTPUT_DIR / "PPS"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -222,6 +248,12 @@ def generate_all_rain_features(max_workers=4):
     metadata_global = _load_metadata_global()
 
     valid_iso3_list = [iso3 for iso3 in resolve_iso3_list() if iso3 in metadata_global["iso3"].unique()]
+
+    print("Ensuring local GPM data is available for all storms (downloading missing storms)...")
+    for iso3 in valid_iso3_list:
+        if (out_dir / f"rainfall_data_{iso3}.csv").exists():
+            continue  # already processed, no need to (re)download
+        _ensure_local_gpm_data(iso3, metadata_global[metadata_global.iso3 == iso3])
 
     print(f"Starting rainfall processing for {len(valid_iso3_list)} countries...")
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
