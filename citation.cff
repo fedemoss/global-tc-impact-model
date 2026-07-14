@@ -1,0 +1,48 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite both the software and the paper below."
+title: "global-tc-impact-model: Global grid-based impact model for tropical cyclones"
+abstract: "Global sub-national impact-based forecasting for tropical cyclones, combining machine learning with exposure-based approaches using open data."
+type: software
+license: GPL-3.0
+repository-code: "https://github.com/fedemoss/global-tc-impact-model"
+authors:
+  - family-names: "Moss"
+    given-names: "Fiona"
+  - family-names: "Mejova"
+    given-names: "Yelena"
+  - family-names: "Kaltenbrunner"
+    given-names: "Andreas"
+  - family-names: "Downing"
+    given-names: "Thomas"
+  - family-names: "van den Homberg"
+    given-names: "Marc"
+  - family-names: "Ndirangu"
+    given-names: "Pauline"
+  - family-names: "Milano"
+    given-names: "Leonardo"
+  - family-names: "Kalimeri"
+    given-names: "Kyriaki"
+    orcid: "https://orcid.org/0000-0001-8068-5916"
+preferred-citation:
+  type: article
+  title: "Global Sub-national Impact-based Forecasting for Tropical Cyclones Using Open Data: Combining Machine Learning and Exposure-based Approaches"
+  journal: "EGUsphere"
+  year: 2026
+  doi: "10.5194/egusphere-2026-1996"
+  authors:
+    - family-names: "Moss"
+      given-names: "Fiona"
+    - family-names: "Mejova"
+      given-names: "Yelena"
+    - family-names: "Kaltenbrunner"
+      given-names: "Andreas"
+    - family-names: "Downing"
+      given-names: "Thomas"
+    - family-names: "van den Homberg"
+      given-names: "Marc"
+    - family-names: "Ndirangu"
+      given-names: "Pauline"
+    - family-names: "Milano"
+      given-names: "Leonardo"
+    - family-names: "Kalimeri"
+      given-names: "Kyriaki"
