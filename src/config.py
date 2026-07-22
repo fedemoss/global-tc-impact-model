@@ -49,7 +49,7 @@ NON_CONTEMPLATED_FEATURES = [
 #     "BRB", "GRD", "MUS"
 # ]
 
-ISO3_LIST = ["ATG"]
+ISO3_LIST = ["ATG", "FJI", "HTI"]
 
 def resolve_iso3_list():
     """Return ISO3_LIST if set, otherwise all GID_0 codes from GADM."""

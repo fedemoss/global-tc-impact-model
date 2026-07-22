@@ -6,7 +6,7 @@ import pandas as pd
 import geopandas as gpd
 import numpy as np
 from pathlib import Path
-from src.config import INPUT_DIR, OUTPUT_DIR
+from src.config import INPUT_DIR, OUTPUT_DIR, resolve_iso3_list
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -145,9 +145,9 @@ def preprocess_emdat_events(iso3_filter=None):
     os.makedirs(out_path.parent, exist_ok=True)
 
     impact_data = clean_emdat(pd.read_csv(emdat_path))
-    if iso3_filter:
-        impact_data = impact_data[impact_data["iso3"] == iso3_filter].reset_index(drop=True)
-        logging.info(f"Filtered to {iso3_filter}: {len(impact_data)} rows, {impact_data['DisNo.'].nunique()} events")
+    iso3_list = [iso3_filter] if iso3_filter else resolve_iso3_list()
+    impact_data = impact_data[impact_data["iso3"].isin(iso3_list)].reset_index(drop=True)
+    logging.info(f"Filtered to {iso3_list}: {len(impact_data)} rows, {impact_data['DisNo.'].nunique()} events")
 
     # Load GAUL shapefile — uses ADM codes that match EM-DAT's Admin Units field
     gaul_shp = gpd.read_file(gaul_path)[["ADM2_CODE", "ADM1_CODE", "ADM0_NAME", "geometry"]]
@@ -246,8 +246,8 @@ def calculate_grid_impact(iso3_filter=None):
         return
 
     df_events = pd.read_csv(in_path)
-    if iso3_filter:
-        df_events = df_events[df_events["GID_0"] == iso3_filter].reset_index(drop=True)
+    iso3_list = [iso3_filter] if iso3_filter else resolve_iso3_list()
+    df_events = df_events[df_events["GID_0"].isin(iso3_list)].reset_index(drop=True)
     impact_data_grid = []
 
     for event_id in df_events["DisNo."].unique():

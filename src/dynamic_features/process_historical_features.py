@@ -1,73 +1,54 @@
 import os
+import numpy as np
 import pandas as pd
 from src.config import INPUT_DIR, OUTPUT_DIR
 
 def create_past_events_feature(df, grid_data_path):
     """
-    Calculates the N_events_5_years feature (number of historical tropical
-    cyclones that impacted a given grid cell in the preceding 5 years).
+    Calculates the N_events_5_years feature: for each event, the number of
+    previous events that hit the same country in the preceding 5 years.
+    The country-level count is assigned to every grid cell of that country.
 
     Args:
         df (pd.DataFrame): Grid-level impact data merged with storm metadata
-                           (must contain: id, iso3, DisNo., sid, landfalldate).
+                           (must contain: iso3, DisNo., landfalldate).
         grid_data_path (Path): Path to the global grid centroids CSV.
 
     Returns:
-        pd.DataFrame: Grid dataset merged with historical event counts.
+        pd.DataFrame: One row per (grid cell, event) for the impacted country,
+                      with columns id, iso3, DisNo., N_events_5_years.
     """
-    # Load grid data to get full universe of grid cells
     grid_data = pd.read_csv(grid_data_path)
     grid_cells = grid_data[['id', 'iso3']].drop_duplicates()
-    
-    # Convert dates
-    df['startdate'] = pd.to_datetime(df['startdate'])
-    df['enddate'] = pd.to_datetime(df['enddate'])
+
     df['landfalldate'] = pd.to_datetime(df['landfalldate'])
-    
-    # Sort events chronologically
-    df_sorted = df.sort_values('landfalldate').reset_index(drop=True)
-    
-    # Extract unique events
-    unique_events = df_sorted[['DisNo.', 'sid', 'landfalldate']].drop_duplicates()
-    
-    results = []
-    
-    # Iterate through each unique event to look back 5 years
-    for _, event_row in unique_events.iterrows():
-        current_event_id = event_row['DisNo.']
-        current_date = event_row['landfalldate']
-        
-        # Define the 5-year lookback window
-        window_start = current_date - pd.DateOffset(years=5)
-        
-        # Filter past events within the 5-year window, EXCLUDING the current event
-        past_events = df_sorted[
-            (df_sorted['landfalldate'] >= window_start) & 
-            (df_sorted['landfalldate'] < current_date) & 
-            (df_sorted['DisNo.'] != current_event_id)
-        ]
-        
-        # Base dataframe with all grid cells initialized to 0 past events
-        event_result = grid_cells.copy()
-        event_result['DisNo.'] = current_event_id
-        event_result['N_events_5_years'] = 0
-        
-        if not past_events.empty:
-            # Count the number of past events that hit each grid cell (id)
-            # A grid cell is considered "hit" if it appears in the past_events dataframe
-            past_hits = past_events.groupby('id')['DisNo.'].nunique().reset_index()
-            past_hits.rename(columns={'DisNo.': 'past_hit_count'}, inplace=True)
-            
-            # Merge the counts back into the event_result dataframe
-            event_result = event_result.merge(past_hits, on='id', how='left')
-            event_result['N_events_5_years'] = event_result['past_hit_count'].fillna(0)
-            event_result.drop(columns=['past_hit_count'], inplace=True)
-            
-        results.append(event_result)
-        
-    # Concatenate all results
-    final_historical_df = pd.concat(results, ignore_index=True)
-    
+
+    # One row per (event, country)
+    unique_events = (
+        df[['DisNo.', 'iso3', 'landfalldate']]
+        .drop_duplicates(subset=['DisNo.', 'iso3'])
+        .dropna(subset=['landfalldate'])
+    )
+
+    # Count prior events per country within the 5-year window
+    counted = []
+    for _, group in unique_events.groupby('iso3'):
+        group = group.sort_values('landfalldate')
+        dates = group['landfalldate'].values
+        window_starts = (group['landfalldate'] - pd.DateOffset(years=5)).values
+        n_before = np.searchsorted(dates, dates, side='left')
+        n_before_window = np.searchsorted(dates, window_starts, side='left')
+        group = group.assign(N_events_5_years=n_before - n_before_window)
+        counted.append(group)
+    event_counts = pd.concat(counted, ignore_index=True)
+
+    # Broadcast each country-level count to that country's grid cells only
+    final_historical_df = grid_cells.merge(
+        event_counts[['DisNo.', 'iso3', 'N_events_5_years']],
+        on='iso3',
+        how='inner',
+    )
+
     return final_historical_df
 
 def _build_impact_with_dates(iso3_filter=None):

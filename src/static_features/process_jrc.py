@@ -38,11 +38,13 @@ def calculate_urban_rural_water(grid, raster, out_dir, iso3, nodata_value=128):
     )
 
     smod_grid_vals = pd.DataFrame(stats).fillna(0)
-    row_sums = smod_grid_vals.sum(axis=1)
 
-    smod_grid_vals["urban"] = (smod_grid_vals.get(21, 0) + smod_grid_vals.get(22, 0) + smod_grid_vals.get(23, 0)) / row_sums
-    smod_grid_vals["rural"] = (smod_grid_vals.get(11, 0) + smod_grid_vals.get(12, 0) + smod_grid_vals.get(13, 0)) / row_sums
-    smod_grid_vals["water"] = smod_grid_vals.get(10, 0) / row_sums
+    smod_grid_vals["urban"] = smod_grid_vals.get(21, 0) + smod_grid_vals.get(22, 0) + smod_grid_vals.get(23, 0) + smod_grid_vals.get(30, 0)
+    smod_grid_vals["rural"] = smod_grid_vals.get(11, 0) + smod_grid_vals.get(12, 0) + smod_grid_vals.get(13, 0)
+    smod_grid_vals["water"] = smod_grid_vals.get(10, 0)
+
+    row_sums = smod_grid_vals[["urban", "rural", "water"]].sum(axis=1)
+    smod_grid_vals[["urban", "rural", "water"]] = smod_grid_vals[["urban", "rural", "water"]].div(row_sums, axis=0)
 
     smod_grid_vals["id"] = grid["id"].values
     df_urban_rural = smod_grid_vals[["id", "urban", "rural", "water"]]
