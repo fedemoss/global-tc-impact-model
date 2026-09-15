@@ -46,6 +46,26 @@ NASA_PPS_BASE_URL = "https://arthurhouhttps.pps.eosdis.nasa.gov/gpmdata/"
 FLOOD_RISK_URL = "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/CEMS-GLOFAS/flood_hazard/RP10/"
 SHDI_URL = "https://globaldatalab.org/shdi/download/shdi/?levels=4&interpolation=0&extrapolation=0"
 
+# --- IMERG rainfall product -----------------------------------------------
+# Two routes to the same feature, `rainfall_max_24h` (max daily accumulation in
+# mm over the landfall +/- 2 day window). They agree to correlation 0.9994; the
+# choice is precision against download size.
+#
+#   "half_hourly" (default) - the 48 `3B-HHR-GIS ... total.accum` granules of
+#       each day, summed. Units are 0.1 mm per half hour, so mm/day is
+#       `raw / 10` summed over the 48. Resolution 0.1 mm, ~166 MB per storm.
+#
+#   "daily" - one `3B-DAY-GIS` granule per date. It is a RATE, not an
+#       accumulation ("Unit=0.1(mm/hr) ... MaxPossibleNumHalfHour=48"), so
+#       mm/day is `raw / 10 * 24`. Resolution 2.4 mm/day, ~1 MB per date, and
+#       it exists on some days where the half-hourly files do not.
+#
+# Forgetting the x24 on the daily product is precisely how this feature ended up
+# under-represented before, so the conversion lives in one function per product
+# in process_rain_features.py.
+IMERG_PRODUCT = os.getenv("TC_IMPACT_IMERG_PRODUCT", "half_hourly")
+IMERG_PRODUCTS = ("half_hourly", "daily")
+
 # Workers for the raster aggregation steps. These run one process per chunk of
 # grid cells; lower it on a small machine (each worker holds a raster window).
 RASTER_WORKERS = int(os.getenv("TC_IMPACT_RASTER_WORKERS", "8"))

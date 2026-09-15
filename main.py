@@ -1,7 +1,7 @@
 import argparse
 import logging
 import sys
-from src.config import INPUT_DIR
+from src.config import INPUT_DIR, IMERG_PRODUCT, IMERG_PRODUCTS
 
 # Collectors
 from src.collectors.general_collector import download_all_public_data
@@ -52,6 +52,17 @@ def main():
     parser.add_argument("--stage", type=str, 
                         choices=["collect", "grid", "static", "dynamic", "build"])
 
+    # Rainfall source. Both routes produce the same `rainfall_max_24h` feature
+    # and agree to correlation 0.9994; they differ in precision and download
+    # size. See IMERG_PRODUCT in src/config.py.
+    parser.add_argument("--imerg-product", type=str, default=IMERG_PRODUCT,
+                        choices=list(IMERG_PRODUCTS),
+                        help=("IMERG product for rainfall. 'half_hourly' (default) sums the "
+                              "48 half-hourly granules per day: 0.1 mm resolution, ~166 MB "
+                              "per storm. 'daily' uses one granule per date and converts its "
+                              "rate to mm/day: 2.4 mm/day resolution, ~1 MB per date, and "
+                              "dates are shared between storms."))
+
     args = parser.parse_args()
 
     # --- DATA PIPELINE ---
@@ -83,7 +94,7 @@ def main():
             process_emdat_events() 
             # Process hazards
             generate_all_wind_features()
-            generate_all_rain_features()
+            generate_all_rain_features(product=args.imerg_product)
             generate_all_historical_features()
 
         if not args.stage or args.stage == "build":

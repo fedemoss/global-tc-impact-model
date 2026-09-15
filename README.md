@@ -82,9 +82,22 @@ pip install -r requirements.txt
     ```
     `process_rain_features.py` loads this file automatically at startup via `_load_dotenv()`.
 
-    The collector (`pps_collector.py`) pulls from the **`arthurhouhttps` near-real-time mirror**, which works with a standard PPS registration — the `jsimpsonhttps` production mirror requires separately-approved elevated access that most accounts don't have. For each storm it downloads the half-hourly **IMERG Late** GIS accumulation product (`3B-HHR-GIS`, extracted from its zip bundle) covering a ±2-day window around landfall, with automatic retry/backoff on transient connection errors, and stores the extracted GeoTIFFs under `data/input/gpm_data/{typhoon_name}/`.
+    The collector (`pps_collector.py`) pulls from the **`arthurhouhttps` mirror**, which works with a standard PPS registration — the `jsimpsonhttps` mirror requires separately-approved elevated access that most accounts don't have. The products served there are the **IMERG Final run** (the product names carry no `-L` suffix), i.e. gauge-calibrated, which is what a historical impact record wants.
 
-    `rainfall_max_24h` is computed by summing the half-hourly accumulation values into a daily total (mm) per grid cell for each of the 5 days in the ±2-day window, then taking the max across those daily totals — i.e. the maximum single-day accumulated rainfall near landfall, not a rain-rate average.
+    `rainfall_max_24h` is the **maximum single-day accumulated rainfall (mm) per grid cell** over the ±2-day window around landfall — not a rain-rate average. It can be built from either of two IMERG products, selected with `--imerg-product` or the `TC_IMPACT_IMERG_PRODUCT` environment variable:
+
+    | | `half_hourly` (default) | `daily` |
+    |---|---|---|
+    | granules | 48 × `3B-HHR-GIS ... total.accum` per day | 1 × `3B-DAY-GIS` per date |
+    | stored units | `0.1 mm` per half hour | `0.1 mm/hr` — a **rate** |
+    | conversion | `raw / 10`, summed over the 48 | `raw / 10 * 24` |
+    | resolution | 0.1 mm | 2.4 mm/day |
+    | download | ~166 MB per storm | ~1 MB per date, shared across storms |
+    | stored under | `data/input/gpm_data/{typhoon_name}/` | `data/input/gpm_data_daily/` |
+
+    The two agree to **correlation 0.9994** (median relative difference 0.17%, verified over 576k pixels); above 75 mm/day they are effectively identical (±0.6%), while below ~25 mm the daily route's 2.4 mm quantisation shows (±6%). Use `half_hourly` when light-rain precision matters and `daily` when download volume does — the whole 2000–2022 record is ~2.8 GB as daily granules against ~90 GB as half-hourly ones.
+
+    > ⚠️ **The two products are not interchangeable without their conversion.** The daily granule stores a *rate*, so using it as if it were an accumulation under-counts rainfall by a factor of 24. Each product therefore has its own conversion function in `process_rain_features.py` (`half_hour_raw_to_mm`, `daily_raw_to_mm`) and they are never mixed. Both report short days rather than silently summing a partial one, since the feature is a maximum over days and an incomplete day can only bias it downward.
 
 * **SHDI Index (Vulnerability)**: Download this dataset manually from *https://globaldatalab.org/shdi/download/shdi/* and put it in under `/data/SHDI/GDL-Subnational-HDI-data.csv` (requires logging to GlobalDataLab)
 
@@ -113,6 +126,8 @@ python main.py --stage grid
 python main.py --stage static
 
 # 4. Process dynamic hazard & impact layers (Wind, Rain, EM-DAT spatial mapping)
+#    Add --imerg-product daily to use the daily IMERG granules instead of the
+#    default 48-per-day half-hourly ones (same feature, ~50x less download).
 python main.py --stage dynamic
 
 # 5. Assembly the final training_dataset.parquet
