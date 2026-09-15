@@ -108,27 +108,43 @@ PARAM_SPACE = {
     "reg_subsample": [0.6, 0.8, 1.0],
     "reg_colsample_bytree": [0.6, 0.8, 1.0],
     "reg_n_estimators": [100, 200, 400],
-    "u1": [2, 3, 5],
-    "u2": [2, 3, 5],
+    # Undersampling ratios: how many majority rows are kept per minority row in
+    # each stage (TwoStageXGBoost.oversample keeps every minority row and
+    # downsamples the majority to u x that count, despite the method's name).
+    # They are part of the model's design, not a preprocessing detail: the
+    # classes are very unbalanced, so how hard each stage is rebalanced trades
+    # recall against precision directly, and interacts with clf_threshold.
+    # u = 1 is a fully balanced training set; larger keeps the data closer to
+    # its natural imbalance.
+    "u1": [1, 2, 3, 5, 8, 10],   # stage 1, affected vs not affected
+    "u2": [1, 2, 3, 5, 8, 10],   # stage 2, high impact vs low impact
     "clf_threshold": [0.30, 0.40, 0.50, 0.60, 0.70],
 }
 
 # A deliberately small space for --search grid, which is exhaustive and so can
 # only afford a few dimensions.
+# An exhaustive grid can only afford a few dimensions, so the ones kept here are
+# those the model is most sensitive to - including both undersampling ratios,
+# which are searched rather than pinned. This is 2*2*2*2*6*6*3 = 1728
+# candidates, i.e. 8640 two-stage fits at the default 5 folds: run it with
+# --n-jobs, or prefer the random search, which covers the same space far more
+# cheaply.
 PARAM_GRID_SMALL = {
     "clf_learning_rate": [0.01, 0.05],
     "clf_max_depth": [3, 5],
-    "clf_n_estimators": [100, 200],
     "reg_learning_rate": [0.01, 0.05],
     "reg_max_depth": [3, 5],
-    "reg_n_estimators": [100, 200],
-    "u1": [3],
-    "u2": [3],
+    "u1": [1, 2, 3, 5, 8, 10],
+    "u2": [1, 2, 3, 5, 8, 10],
     "clf_threshold": [0.4, 0.5, 0.6],
 }
+# Held fixed across the grid, at the production defaults, so the exhaustive
+# sweep stays tractable. The random search varies all of these.
 GRID_DEFAULTS = {
-    "clf_min_child_weight": 1, "clf_gamma": 0.5, "clf_subsample": 0.8, "clf_colsample_bytree": 0.8,
-    "reg_min_child_weight": 1, "reg_gamma": 0.5, "reg_subsample": 0.8, "reg_colsample_bytree": 0.8,
+    "clf_min_child_weight": 1, "clf_gamma": 0.5, "clf_subsample": 0.8,
+    "clf_colsample_bytree": 0.8, "clf_n_estimators": 200,
+    "reg_min_child_weight": 1, "reg_gamma": 0.5, "reg_subsample": 0.8,
+    "reg_colsample_bytree": 0.8, "reg_n_estimators": 200,
 }
 
 
