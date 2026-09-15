@@ -17,11 +17,11 @@ The core of this project is the **Data Factory**, which automates the collection
 │   ├── static_features/      # Spatial Processing (grid_cells.py, process_gadm.py, etc.)
 │   ├── dynamic_features/     # Event-Based Processing (process_emdat.py, process_wind.py, etc.)
 │   ├── models/               # Two-Stage XGBoost & Baselines (train.py)
-├── test/                     # Hyperparameter search (hyperparameter_search.py)
 │   ├── evaluation/           # LOOCV Pipeline & Metrics
 │   ├── interpretability/     # SHAP Analysis & Visualization
 │   ├── config.py             # Global constants, URLs, and ISO3 List
 │   └── dataset_builder.py    # Master script to compile the final Parquet
+├── test/                     # Hyperparameter search (hyperparameter_search.py)
 ├── main.py                   # Unified CLI Entry Point
 ├── requirements.txt          # Python dependencies
 └── README.md
@@ -34,7 +34,8 @@ The core of this project is the **Data Factory**, which automates the collection
 ### 1. System Dependencies
 The pipeline relies on several low-level geospatial libraries for raster processing and atmospheric data handling:
 * **Python 3.10-3.12**: The core environment.
-* **GDAL (Geospatial Data Abstraction Library)**: Required for processing SRTM elevation data and JRC urbanization rasters (specifically `gdaldem`).
+* **GDAL (Geospatial Data Abstraction Library)**: Required for processing SRTM elevation data and JRC urbanization rasters (specifically `gdaldem`). The pip `gdal` bindings are built against your system libgdal, so install GDAL **first** and keep the versions matched.
+* **OpenMP runtime (macOS)**: `xgboost` needs a recent `libomp` — `brew install libomp` (an outdated libomp fails at import with a missing-symbol error).
 
 
 
@@ -67,7 +68,7 @@ pip install -r requirements.txt
 
 **Note: we leave to the user the "sid" and "Disno." matching of storms. This involves manual labeling based TC names, locations and dates on top of classic fuzzy-matching techniques or (alternatively) the use of LLM matching approaches.** 
 
-* **GAUL 2014-2015 Dataset (Administrative Boundaries)**: This spatial dataset is required to map the EM-DAT `Admin Units` to physical geometries. Because official distribution has been restricted, the only reliable way to access this dataset is through **Google Earth Engine (GEE)**. 
+* **GAUL 2014-2015 Dataset (Administrative Boundaries)**: This spatial dataset is required to map the EM-DAT `Admin Units` to physical geometries. The collector first tries the direct FAO catalog mirror (`GAUL_ADM2_URL` in `src/config.py`); if that link is unavailable, export it through **Google Earth Engine (GEE)**. 
     * **How to obtain**: 
       1. Register for a free [Google Earth Engine account](https://earthengine.google.com/).
       2. Locate the GAUL dataset in the GEE Data Catalog (e.g., `FAO/GAUL/2015/level2`)

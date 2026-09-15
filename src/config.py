@@ -12,7 +12,7 @@ OUTPUT_DIR = Path(os.getenv("TC_IMPACT_OUTPUT_DIR", BASE_DIR / "data" / "output"
 
 # Data Source URLs
 GADM_BASE_URL = "https://gadm.org/download_world.html"
-GAUL_ADM2_URL = "https://storage.googleapis.com/fao-maps-catalog-data/boundaries/GAUL_2024_L2.zip" # Check
+GAUL_ADM2_URL = "https://storage.googleapis.com/fao-maps-catalog-data/boundaries/GAUL_2024_L2.zip"  # direct FAO catalog mirror; if it goes away, export via GEE (see README)
 # Population and degree of urbanisation are time dependent: both are collected
 # at several anchor years and interpolated to the year of each event, instead of
 # freezing one year for the whole 2000-2022 record (see utils/time_interpolation.py).
@@ -91,9 +91,9 @@ FEATURES = [
 
 # Non-contemplated features (Discussed in paper but excluded from global training)
 NON_CONTEMPLATED_FEATURES = [
-    "flood_risk",    # Excluded: Basins < 500km2 missing in 22/72 countries
-    "shdi"           # Note: SHDI used where available, but missing in 19/72 countries
-    "track_distance" # Excluded as its highly correlated with windspeed 
+    "flood_risk",     # Excluded: Basins < 500km2 missing in 22/72 countries
+    "shdi",           # Note: SHDI used where available, but missing in 19/72 countries
+    "track_distance", # Excluded as its highly correlated with windspeed
 ]
 
 # ISO3 Country List
