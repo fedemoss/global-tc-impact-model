@@ -17,6 +17,7 @@ The core of this project is the **Data Factory**, which automates the collection
 │   ├── static_features/      # Spatial Processing (grid_cells.py, process_gadm.py, etc.)
 │   ├── dynamic_features/     # Event-Based Processing (process_emdat.py, process_wind.py, etc.)
 │   ├── models/               # Two-Stage XGBoost & Baselines (train.py)
+├── test/                     # Hyperparameter search (hyperparameter_search.py)
 │   ├── evaluation/           # LOOCV Pipeline & Metrics
 │   ├── interpretability/     # SHAP Analysis & Visualization
 │   ├── config.py             # Global constants, URLs, and ISO3 List
@@ -134,9 +135,34 @@ python main.py --stage dynamic
 python main.py --stage build
 ```
 
-### 3. Model Training & Interpretability
+### 3. Hyperparameter Search (optional, but do it before reporting results)
+```bash
+# Joint random search over both stages; writes data/model_hyperparameters.json
+python test/hyperparameter_search.py --n-iter 80 --n-events 200
+
+# Exhaustive search over a deliberately small grid instead
+python test/hyperparameter_search.py --search grid
+
+# Tiny budget, just to check the plumbing runs
+python test/hyperparameter_search.py --dry-run
+```
+
+`test/hyperparameter_search.py` tunes **both stages at once** — the stage-1 classifier, the stage-2 regressor, the two class-balancing ratios (`u1`, `u2`) and the stage-1 decision threshold (`clf_threshold`). Tuning the stages separately would miss their interaction: how aggressively stage 1 flags cells decides which rows stage 2 ever sees.
+
+Three properties are worth knowing, because they decide whether the reported numbers mean anything:
+
+* **Folds are grouped by event (`DisNo.`), never by grid cell.** Cells within one cyclone are strongly correlated, so a row-wise split would put near-duplicates on both sides and report a score the model cannot reproduce on an unseen storm.
+* **A held-out set of events is scored exactly once**, after selection. The cross-validated score is optimistic by construction — it is the quantity that was optimised — so the held-out number is the one to quote.
+* **Metrics are computed at ADM1 level on pooled out-of-fold predictions**, where impact is actually reported, at both the "affected at all" (0%) and "highly affected" (15%) thresholds.
+
+The winner is written to `data/model_hyperparameters.json` and **loaded automatically** by `TwoStageXGBoost` — no copying numbers by hand. If the file is absent the model falls back to its built-in defaults, so a fresh clone still runs; explicit constructor arguments always win over the file. Override the location with `TC_IMPACT_HYPERPARAMETERS`.
+
+> The development subset in `ISO3_LIST` (ATG/FJI/HTI) is far too small for a search — every event fails the selection filters. Point `--input` at the full dataset.
+
+### 4. Model Training & Interpretability
 ```bash
 # Run 2-Stage XGBoost with Leave-One-Event-Out Cross-Validation (LOOCV)
+# Uses data/model_hyperparameters.json when present, defaults otherwise.
 python main.py --run-models
 
 # Generate SHAP Summary and Dependence Plots for the trained model

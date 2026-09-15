@@ -72,6 +72,14 @@ RASTER_WORKERS = int(os.getenv("TC_IMPACT_RASTER_WORKERS", "8"))
 # Grid cells per task. Keeps one large country from becoming the critical path.
 RASTER_CHUNK_SIZE = int(os.getenv("TC_IMPACT_RASTER_CHUNK", "10000"))
 
+# Tuned hyperparameters for the two-stage model, written by
+# test/hyperparameter_search.py and picked up automatically by
+# models/two_stage_xgb.py. If the file is absent the model falls back to the
+# defaults hardcoded in that class, so a fresh clone still runs.
+HYPERPARAMETERS_PATH = Path(
+    os.getenv("TC_IMPACT_HYPERPARAMETERS", BASE_DIR / "data" / "model_hyperparameters.json")
+)
+
 # FEATURES used in the final 2-stage XGBoost model
 FEATURES = [
     "wind_speed", "rainfall_max_24h", "population", "coast_length_meters", 
