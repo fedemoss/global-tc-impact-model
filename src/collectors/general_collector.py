@@ -8,8 +8,9 @@ from bs4 import BeautifulSoup
 from tqdm import tqdm
 
 from src.config import (
-    INPUT_DIR, GADM_BASE_URL, WORLDPOP_URL, LANDSLIDE_URL, 
-    STORM_SURGE_URL, JRC_SMOD_URL, SRTM_BASE_URL, FLOOD_RISK_URL,
+    INPUT_DIR, GADM_BASE_URL, WORLDPOP_URL_TEMPLATE, POP_ANCHOR_YEARS,
+    LANDSLIDE_URL, STORM_SURGE_URL, JRC_SMOD_URL_TEMPLATE, SMOD_EPOCH_YEARS,
+    SRTM_BASE_URL, FLOOD_RISK_URL,
     SHDI_URL, GAUL_ADM2_URL
 )
 
@@ -102,10 +103,22 @@ def collect_gaul():
     except Exception as e:
         print(f"Error collecting GAUL data: {e}")
 
+def worldpop_tif_path(year):
+    return INPUT_DIR / "Worldpop" / f"ppp_{year}_1km_Aggregated.tif"
+
+
 def collect_worldpop():
-    """Downloads the mosaicked 1km global population TIFF."""
-    out_path = INPUT_DIR / "Worldpop" / "ppp_2020_1km_Aggregated.tif"
-    download_file(WORLDPOP_URL, out_path)
+    """Downloads one mosaicked 1km global population TIFF per anchor year.
+
+    Population is interpolated to the year of each event, so the whole set of
+    anchors is needed rather than 2020 alone.
+    """
+    for year in POP_ANCHOR_YEARS:
+        out_path = worldpop_tif_path(year)
+        if out_path.exists():
+            print(f"WorldPop {year} already present, skipping.")
+            continue
+        download_file(WORLDPOP_URL_TEMPLATE.format(year=year), out_path)
 
 def collect_landslide():
     """Downloads the rainfall-triggered landslide hazard map."""
@@ -132,16 +145,33 @@ def collect_flood_risk():
     for tif in tif_files:
         download_file(urljoin(FLOOD_RISK_URL, tif), out_dir / tif)
 
+def smod_tif_path(epoch):
+    return INPUT_DIR / "JRC" / f"GHS_SMOD_{epoch}_GLOBE_R2022A_54009_1000_V1_0.tif"
+
+
 def collect_jrc():
-    """Downloads and extracts the JRC SMOD urbanization dataset."""
+    """Downloads and extracts one JRC SMOD grid per epoch.
+
+    As with population, the degree of urbanisation is interpolated to the year
+    of each event, so every anchor epoch is fetched.
+    """
     out_dir = INPUT_DIR / "JRC"
     os.makedirs(out_dir, exist_ok=True)
-    
-    response = requests.get(JRC_SMOD_URL, verify=False, stream=True)
-    with zipfile.ZipFile(io.BytesIO(response.content)) as z:
-        for file in z.namelist():
-            if file.endswith(".tif"):
-                z.extract(file, out_dir)
+
+    for epoch in SMOD_EPOCH_YEARS:
+        if smod_tif_path(epoch).exists():
+            print(f"SMOD {epoch} already present, skipping.")
+            continue
+        url = JRC_SMOD_URL_TEMPLATE.format(epoch=epoch)
+        print(f"Downloading SMOD {epoch}...")
+        response = requests.get(url, verify=False, stream=True)
+        if not response.ok:
+            print(f"Failed to download SMOD {epoch}: HTTP {response.status_code}")
+            continue
+        with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+            for file in z.namelist():
+                if file.endswith(".tif"):
+                    z.extract(file, out_dir)
 
 def collect_shdi():
     """Checks for SHDI data; provides instructions if missing."""

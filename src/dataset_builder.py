@@ -1,8 +1,11 @@
+import logging
 import os
 import pandas as pd
 import geopandas as gpd
 from pathlib import Path
 from src.config import INPUT_DIR, OUTPUT_DIR, resolve_iso3_list
+from src.utils.exposure import load_time_varying_features
+from src.utils.time_interpolation import event_year_from_disno
 
 def load_grid_gid_mapping(iso3):
     """
@@ -62,10 +65,11 @@ def load_static_features(iso3):
 
     # 1. Gridded Static Layers
     # The SRTM dataset contains elevation, slope, ruggedness, and coastal features.
+    # Population and degree of urbanisation are NOT here: both change over the
+    # 2000-2022 record and are loaded per event year by
+    # load_time_varying_features() instead.
     layers = {
         "SRTM": f"srtm_grid_data_{iso3}.csv",
-        "Worldpop": f"population_grid_{iso3}.csv",
-        "JRC": f"degree_of_urbanization_{iso3}.csv",
         "FloodRisk": f"flood_risk_{iso3}.csv",
         "SHDI": f"shdi_grid_{iso3}.csv"
     }
@@ -178,7 +182,20 @@ def build_country_dataset(iso3, df_meta, df_impact_master):
         df_final = df_dyn.merge(df_static, on=["id", "iso3"], how="left")
     else:
         df_final = df_dyn
-        
+
+    # 8. Merge Time-Varying Exposure (population, degree of urbanisation)
+    # Keyed on the event year, so a 2000 storm is scored against the population
+    # and urban extent of 2000 rather than of 2020/2025.
+    df_final["year"] = event_year_from_disno(df_final["DisNo."])
+    df_time = load_time_varying_features(iso3, df_final["year"].dropna().unique())
+    if df_time is None:
+        logging.error(f"{iso3}: no time-varying exposure available, country skipped")
+        return None
+    n_before = len(df_final)
+    df_final = df_final.merge(df_time, on=["id", "iso3", "year"], how="left")
+    if len(df_final) != n_before:
+        logging.error(f"{iso3}: exposure merge changed row count {n_before} -> {len(df_final)}")
+
     return df_final
 
 def compile_global_dataset():
