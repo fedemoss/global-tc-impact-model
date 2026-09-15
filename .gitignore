@@ -3,8 +3,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Everything in /data
+# Everything in /data -- except the tuned hyperparameters, which are part of
+# the released configuration (reviewers need the exact selected values).
 /data/*
+!/data/model_hyperparameters.json
 
 # Distribution / packaging
 .Python
@@ -159,3 +161,6 @@ rivers/
 # Specific files
 grid_old.py
 download_srtm_tiles_old.py
+
+# Local Overleaf clone living alongside this repo on some machines -- never part of the model release
+/paper/

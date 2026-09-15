@@ -41,8 +41,9 @@ def main():
     parser = argparse.ArgumentParser(description="Global TC Impact Data Factory")
     
     # Operation Mode
-    parser.add_argument("--build-dataset", action="store_true", default=True,
-                        help="Generate the full training_dataset.parquet")
+    parser.add_argument("--build-dataset", action="store_true",
+                        help="Generate the full training_dataset.parquet (implied when no "
+                             "--run-* flag is given, and by --stage)")
     parser.add_argument("--run-models", action="store_true", 
                         help="Train the 2-stage XGBoost model")
     parser.add_argument("--run-interpretability", action="store_true",
@@ -65,8 +66,15 @@ def main():
 
     args = parser.parse_args()
 
+    # Build the dataset when asked for explicitly (--build-dataset or --stage),
+    # or when nothing else was requested -- so a bare `python main.py` is still
+    # the full factory, but `--run-models` alone no longer downloads the world.
+    build_dataset = args.build_dataset or args.stage is not None or not (
+        args.run_models or args.run_interpretability
+    )
+
     # --- DATA PIPELINE ---
-    if args.build_dataset:
+    if build_dataset:
         
         if not args.stage or args.stage == "collect":
             logging.info("Stage 1: Downloading Public Data...")

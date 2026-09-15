@@ -100,18 +100,21 @@ class TwoStageXGBoost:
         }
 
     @staticmethod
-    def oversample(df, target, u=1):
-        """Rebalance `target` by keeping at most `u` majority rows per minority row."""
-        minority_size = df[target].sum()
-        majority_size = int(u * minority_size)
-        
-        df_balanced = (
-            df.groupby(target, group_keys=False)
-            .apply(lambda x: x.sample(n=min(minority_size if x.name == 1 else majority_size, len(x)), random_state=42))
-            .sample(frac=1, random_state=42)
+    def oversample(df, target, u=1, random_state=42):
+        """Rebalance `target` by keeping at most `u` majority rows per minority row.
+
+        Implemented with explicit sampling rather than `groupby.apply`, which
+        pandas >= 3.0 returns without the grouping column (so the label column
+        would vanish from the balanced frame).
+        """
+        minority = df[df[target] == 1]
+        majority = df[df[target] == 0]
+        n_major = min(int(u * len(minority)), len(majority))
+        return (
+            pd.concat([minority, majority.sample(n=n_major, random_state=random_state)])
+            .sample(frac=1, random_state=random_state)
             .reset_index(drop=True)
         )
-        return df_balanced
 
     def train_and_predict(self, df_train, df_test, u1=None, u2=None, clf_threshold=None):
         """Executes the custom 2-stage training and prediction flow with oversampling.

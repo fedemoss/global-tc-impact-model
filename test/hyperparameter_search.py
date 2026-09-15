@@ -431,7 +431,10 @@ def main(args):
         },
     }
     with open(args.output, "w") as f:
-        json.dump(payload, f, indent=2)
+        # numpy scalars (e.g. an all-integer gamma column) are not JSON
+        # serializable; .item() converts them to their Python equivalents.
+        json.dump(payload, f, indent=2,
+                  default=lambda o: o.item() if hasattr(o, "item") else str(o))
     logging.info(f"chosen hyperparameters -> {args.output} (picked up automatically by TwoStageXGBoost)")
     return 0
 
@@ -455,8 +458,10 @@ def parse_args(argv=None):
     p.add_argument("--n-jobs", type=int, default=4, help="candidates evaluated in parallel")
     p.add_argument("--nthread", type=int, default=1,
                    help="xgboost threads per fit; keep n_jobs * nthread <= cores")
-    p.add_argument("--select-on", default="f1",
-                   help="metric that decides the winner (pre-specify it; do not eyeball several)")
+    p.add_argument("--select-on", default="f1_high",
+                   help="metric that decides the winner (pre-specify it; do not eyeball several). "
+                        "Default f1_high: ADM1-level F1 at the 15%% threshold, the selection "
+                        "objective reported in the paper.")
     p.add_argument("--random-state", type=int, default=RANDOM_STATE)
     p.add_argument("--dry-run", action="store_true",
                    help="tiny budget for a smoke test: 2 candidates, 2 folds, 20 events")
