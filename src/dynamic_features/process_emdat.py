@@ -7,6 +7,7 @@ import geopandas as gpd
 import numpy as np
 from pathlib import Path
 from src.config import INPUT_DIR, OUTPUT_DIR, resolve_iso3_list
+from src.utils.exposure import load_population_by_year
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
@@ -234,10 +235,14 @@ def calculate_grid_impact(iso3_filter=None):
     The function calculates the 'perc_affected_pop_grid_region' metric by determining
     the total population within the administrative units specifically affected by
     an event and distributing the impact accordingly.
+
+    The population denominator is taken at the year of the event, not at a fixed
+    2020: "Total Affected" divided by a 2020 population understates the share
+    affected by every earlier event, and by a country-dependent amount (between
+    2000 and 2020 Madagascar grew by a factor of 1.8, Japan not at all).
     """
     in_path  = OUTPUT_DIR / "EMDAT" / "impact_data_adm1_level.csv"
     out_path = OUTPUT_DIR / "EMDAT" / "impact_data.csv"
-    pop_dir  = OUTPUT_DIR / "Worldpop" / "grid_data"
 
     # Path to the administrative mapping (created during SHDI processing)
     grid_admin_dir = OUTPUT_DIR / "SHDI" / "grid_data"
@@ -248,22 +253,37 @@ def calculate_grid_impact(iso3_filter=None):
     df_events = pd.read_csv(in_path)
     iso3_list = [iso3_filter] if iso3_filter else resolve_iso3_list()
     df_events = df_events[df_events["GID_0"].isin(iso3_list)].reset_index(drop=True)
+    df_events["event_year"] = df_events["DisNo."].astype(str).str[:4].astype(int)
     impact_data_grid = []
+
+    # Interpolating the population anchors is done once per country, not once
+    # per event, since many events share a country and often a year
+    population_cache = {}
 
     for event_id in df_events["DisNo."].unique():
         # 1. Prepare event metadata
         df_event = df_events[df_events["DisNo."] == event_id].copy()
         iso   = df_event["GID_0"].iloc[0]
         level = df_event["level"].iloc[0]  # ADM1 or ADM2
+        year  = int(df_event["event_year"].iloc[0])
 
         # 2. Load on-demand grid and administrative mapping
-        pop_file       = pop_dir / f"population_grid_{iso}.csv"
         admin_map_file = grid_admin_dir / f"shdi_grid_{iso}.csv"
-
-        if not (pop_file.exists() and admin_map_file.exists()):
+        if not admin_map_file.exists():
             continue
 
-        df_pop   = pd.read_csv(pop_file)
+        if iso not in population_cache:
+            years = df_events.loc[df_events["GID_0"] == iso, "event_year"].unique()
+            population_cache[iso] = load_population_by_year(iso, years)
+        pop_by_year = population_cache[iso]
+        if pop_by_year is None:
+            logging.warning(f"{iso}: no time-varying population, events skipped")
+            continue
+
+        df_pop = pop_by_year[pop_by_year["year"] == year][["id", "iso3", "population"]]
+        if df_pop.empty:
+            continue
+
         df_admin = pd.read_csv(admin_map_file)[["id", "GID_1", "GID_2"]]
 
         # Combine grid population with administrative IDs
