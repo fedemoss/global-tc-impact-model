@@ -16,12 +16,14 @@ on the classifier it sits behind. The search space therefore spans both stages
 plus the model's own class-balancing ratios (`u1`, `u2`) and the stage-1
 decision threshold.
 
-**Folds are split by event, never by grid cell.** Grid cells within one cyclone
-are strongly correlated - same storm, same country, often adjacent land. Random
-row-wise folds would put near-duplicate rows on both sides of the split and
-report a score the model cannot reproduce on a genuinely unseen storm.
-`StratifiedGroupKFold` on `DisNo.` keeps every event whole and keeps the
-severity mix even across folds.
+**Folds are split by physical cyclone, never by grid cell or country-event
+record.** Grid cells within one cyclone are strongly correlated - same storm,
+same country, often adjacent land - and a storm that hits several countries
+contributes several EM-DAT `DisNo.` records. Random row-wise folds would put
+near-duplicate rows on both sides of the split, and `DisNo.`-wise folds would
+put the same storm on both sides through different countries.
+`StratifiedGroupKFold` on the IBTrACS `sid` keeps every cyclone whole and keeps
+the severity mix even across folds.
 
 **A held-out set of events is scored exactly once.** Hyperparameters are chosen
 on cross-validated folds; the held-out events are touched only at the end. The
@@ -193,7 +195,22 @@ def load_dataset(input_path):
 
     keep = set(c1) & set(c2) & set(c3)
     df = df[df["DisNo."].isin(keep)].drop_duplicates().reset_index(drop=True)
-    logging.info(f"{df['DisNo.'].nunique()} events, {len(df):,} grid-cell rows after filtering")
+
+    if "sid" not in df.columns or df["sid"].isna().any():
+        raise ValueError(
+            "the grouping unit is the physical cyclone: every row needs a non-null "
+            "'sid' (IBTrACS storm id) -- see the EM-DAT input schema in the README"
+        )
+    multi = df.groupby("DisNo.")["sid"].nunique()
+    if (multi > 1).any():
+        raise ValueError(
+            f"these DisNo. map to more than one sid and must be resolved first: "
+            f"{sorted(multi[multi > 1].index.tolist())}"
+        )
+    logging.info(
+        f"{df['sid'].nunique()} physical cyclones / {df['DisNo.'].nunique()} country-event "
+        f"records / {len(df):,} grid-cell rows after filtering"
+    )
 
     if df.empty:
         raise ValueError(
@@ -207,17 +224,17 @@ def load_dataset(input_path):
 
 
 def event_severity_labels(df, target_name=TARGET_NAME):
-    """Per-event severity class, used only to stratify splits - never a feature."""
+    """Per-cyclone severity class, used only to stratify splits - never a feature."""
     def categorize(x):
         if x == 0:
             return 0
         return 1 if x < IMPACT_THRESHOLD_HIGH else 2
-    return df.groupby("DisNo.")[target_name].max().apply(categorize)
+    return df.groupby("sid")[target_name].max().apply(categorize)
 
 
 def split_events(df, severity, n_events, test_fraction, random_state=RANDOM_STATE):
-    """A representative event subsample, split into a search pool and a held-out set."""
-    all_events = df["DisNo."].unique().tolist()
+    """A representative cyclone subsample, split into a search pool and a held-out set."""
+    all_events = df["sid"].unique().tolist()
 
     if 0 < n_events < len(all_events):
         events_for_search, _ = train_test_split(
@@ -235,18 +252,18 @@ def split_events(df, severity, n_events, test_fraction, random_state=RANDOM_STAT
 
 
 def make_folds(df_search, severity, n_folds, random_state=RANDOM_STATE):
-    """Event-grouped CV folds, returned as (train_events, val_events) pairs."""
-    groups = df_search["DisNo."]
+    """Cyclone-grouped CV folds, returned as (train_sids, val_sids) pairs."""
+    groups = df_search["sid"]
     if HAS_STRATIFIED_GROUP_KFOLD:
         splitter = StratifiedGroupKFold(n_splits=n_folds, shuffle=True, random_state=random_state)
-        split_iter = splitter.split(df_search, df_search["DisNo."].map(severity), groups)
+        split_iter = splitter.split(df_search, df_search["sid"].map(severity), groups)
     else:
         splitter = GroupKFold(n_splits=n_folds)
         split_iter = splitter.split(df_search, groups=groups)
 
     return [
-        (df_search.iloc[tr]["DisNo."].unique().tolist(),
-         df_search.iloc[va]["DisNo."].unique().tolist())
+        (df_search.iloc[tr]["sid"].unique().tolist(),
+         df_search.iloc[va]["sid"].unique().tolist())
         for tr, va in split_iter
     ]
 
@@ -311,8 +328,10 @@ def run_two_stage(df_all, features, train_events, test_events, cand, nthread=1):
         clf_threshold=float(cand["clf_threshold"]),
         use_tuned=False,  # never let a previously-saved file leak into the search
     )
-    df_train = df_all[df_all["DisNo."].isin(train_events)]
-    df_test = df_all[df_all["DisNo."].isin(test_events)]
+    df_train = df_all[df_all["sid"].isin(train_events)]
+    df_test = df_all[df_all["sid"].isin(test_events)]
+    # A physical cyclone must never sit on both sides of a fold.
+    assert not set(df_train["sid"].unique()) & set(df_test["sid"].unique())
     return model.train_and_predict(df_train, df_test)
 
 
@@ -351,7 +370,7 @@ def main(args):
     df = load_dataset(args.input)
     severity = event_severity_labels(df)
 
-    n_events_available = df["DisNo."].nunique()
+    n_events_available = df["sid"].nunique()
     if n_events_available < MIN_EVENTS:
         logging.error(
             f"only {n_events_available} events available; at least {MIN_EVENTS} are needed to "
@@ -363,8 +382,8 @@ def main(args):
         df, severity, args.n_events, args.test_fraction, args.random_state)
     logging.info(f"search pool: {len(search_events)} events | held-out: {len(holdout_events)} events")
 
-    df_search = df[df["DisNo."].isin(search_events)].copy()
-    df_holdout = df[df["DisNo."].isin(holdout_events)].copy()
+    df_search = df[df["sid"].isin(search_events)].copy()
+    df_holdout = df[df["sid"].isin(holdout_events)].copy()
 
     n_folds = min(args.n_folds, max(2, len(search_events)))
     folds = make_folds(df_search, severity, n_folds, args.random_state)
@@ -428,6 +447,9 @@ def main(args):
             "n_events": len(search_events) + len(holdout_events),
             "n_search_events": len(search_events), "n_holdout_events": len(holdout_events),
             "n_folds": len(folds), "random_state": args.random_state,
+            "group_col": "sid",
+            "search_events": sorted(map(str, search_events)),
+            "holdout_events": sorted(map(str, holdout_events)),
         },
     }
     with open(args.output, "w") as f:

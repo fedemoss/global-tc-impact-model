@@ -19,14 +19,22 @@ def _save_final_model(model, out_dir):
         joblib.dump(model.model, out_dir / "model.joblib")
 
 
-def run_loocv_pipeline(df, events, model, strategy="global", output_folder="loocv_results"):
+def run_loocv_pipeline(df, events, model, strategy="global", output_folder="loocv_results",
+                       event_col="sid"):
     """
     Executes LOOCV strategies based exactly on the original paper parameters.
-    
+
+    The unit left out per fold is the PHYSICAL CYCLONE (IBTrACS `sid`), not the
+    EM-DAT country-event record: a storm that hits several countries contributes
+    several `DisNo.` records, and grouping by `sid` keeps all of them on one
+    side of every fold. `events` must therefore be `df[event_col].unique()`.
+
     Strategies:
-    - 'global': Standard LOOCV (train on all except test event).
-    - 'walk_forward': Train only on events occurring before the test event.
-    - 'geo_constrained': Train only on events in the same cyclone_basin as the test event.
+    - 'global': Standard LOOCV (train on all except test cyclone).
+    - 'walk_forward': Train only on cyclones strictly before the test cyclone's
+      earliest record date.
+    - 'geo_constrained': Train only on cyclones in the same cyclone_basin as the
+      test cyclone (basin of its first record, for the rare basin-crossers).
     """
     out_dir = OUTPUT_DIR / output_folder
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -43,30 +51,34 @@ def run_loocv_pipeline(df, events, model, strategy="global", output_folder="looc
         # Exact Exclusion Logic per Strategy
         # -------------------------------------------------------------
         if strategy == "walk_forward":
-            event_date = df.loc[df["DisNo."] == ev, "date"].iloc[0]
-            # Train only on events strictly before the test event's date
-            df_train = df[(df["DisNo."] != ev) & (df["date"] < event_date)].copy()
+            # Earliest record date of the storm -- multi-country storms have several
+            event_date = df.loc[df[event_col] == ev, "date"].min()
+            df_train = df[(df[event_col] != ev) & (df["date"] < event_date)].copy()
             if df_train.empty:
                 logger.info(f"Skipping {ev} — no past data to train on for walk-forward.")
                 continue
                 
         elif strategy == "geo_constrained":
-            event_basin = df.loc[df["DisNo."] == ev, "cyclone_basin"].iloc[0]
-            # Train only on events in the exact same basin
-            df_train = df[(df["DisNo."] != ev) & (df["cyclone_basin"] == event_basin)].copy()
+            event_basin = df.loc[df[event_col] == ev, "cyclone_basin"].iloc[0]
+            # Train only on cyclones in the exact same basin
+            df_train = df[(df[event_col] != ev) & (df["cyclone_basin"] == event_basin)].copy()
             if df_train.empty:
                 logger.info(f"Skipping {ev} — no other events in basin {event_basin} to train on.")
                 continue
                 
         elif strategy == "global":
-            # Train on all events except the target
-            df_train = df[df["DisNo."] != ev].copy()
-            
+            # Train on all cyclones except the target
+            df_train = df[df[event_col] != ev].copy()
+
         else:
             raise ValueError(f"Unknown strategy: {strategy}")
 
-        # Test set is always the isolated event
-        df_test = df[df["DisNo."] == ev].copy()
+        # Test set is always the isolated cyclone
+        df_test = df[df[event_col] == ev].copy()
+
+        # A physical cyclone must never sit on both sides of a fold.
+        overlap = set(df_train[event_col].unique()) & set(df_test[event_col].unique())
+        assert not overlap, f"fold leakage: {sorted(overlap)} in both train and test"
 
         # -------------------------------------------------------------
         # Execute Model Pipeline

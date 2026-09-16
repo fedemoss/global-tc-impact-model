@@ -152,7 +152,7 @@ python test/hyperparameter_search.py --dry-run
 
 Three properties are worth knowing, because they decide whether the reported numbers mean anything:
 
-* **Folds are grouped by event (`DisNo.`), never by grid cell.** Cells within one cyclone are strongly correlated, so a row-wise split would put near-duplicates on both sides and report a score the model cannot reproduce on an unseen storm.
+* **Folds are grouped by physical cyclone (IBTrACS `sid`), never by grid cell or country-event record.** Cells within one cyclone are strongly correlated, and a storm that hits several countries contributes several `DisNo.` records — a row-wise or `DisNo.`-wise split would put the same storm on both sides and report a score the model cannot reproduce on an unseen one. LOOCV in `src/evaluation/cv_strategies.py` leaves one `sid` out per fold for the same reason.
 * **A held-out set of events is scored exactly once**, after selection. The cross-validated score is optimistic by construction — it is the quantity that was optimised — so the held-out number is the one to quote.
 * **Metrics are computed at ADM1 level on pooled out-of-fold predictions**, where impact is actually reported, at both the "affected at all" (0%) and "highly affected" (15%) thresholds.
 
