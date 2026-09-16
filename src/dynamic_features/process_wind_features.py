@@ -1,6 +1,5 @@
-import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
+import logging
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import geopandas as gpd
 import numpy as np
@@ -11,7 +10,13 @@ from shapely.geometry import LineString
 
 from src.config import INPUT_DIR, OUTPUT_DIR, resolve_iso3_list
 
+<<<<<<< HEAD
 def windfield_to_grid(tc, tracks, grids, cent_indices=None):
+=======
+logger = logging.getLogger(__name__)
+
+def windfield_to_grid(tc, tracks, grids):
+>>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
     """From IbTracks tracks, create wind_speed and track_distance features and aggregate to grid cells."""
     df_windfield = pd.DataFrame()
 
@@ -159,7 +164,8 @@ def get_storm_tracks(all_events):
                 problematic_sid.append(sid)
                 continue
             sel_ibtracs.append(t)
-        except:
+        except Exception as e:
+            logger.warning(f"Skipping sid={sid}: {e}")
             problematic_sid.append(sid)
 
     tc_tracks = TCTracks()
@@ -177,7 +183,7 @@ def process_storm_tracks(tc_tracks):
     for i in range(len(tc_tracks.get_track())):
         try:
             track_xarray = tc_tracks.get_track()[i]
-        except:
+        except (IndexError, TypeError):
             track_xarray = tc_tracks.get_track()
             
         w = np.array(track_xarray.max_sustained_wind)
@@ -257,6 +263,7 @@ def process_single_country(iso3, out_dir, gdf_global, all_events_global, shp_glo
 
 def generate_all_wind_features(max_workers=5, iso3_filter=None):
     """Entry point to execute wind processing."""
+<<<<<<< HEAD
     print("Loading global grid centroids...")
     gdf_global = load_data()
 
@@ -269,15 +276,36 @@ def generate_all_wind_features(max_workers=5, iso3_filter=None):
     valid_iso3_list = [iso3 for iso3 in resolve_iso3_list() if iso3 in all_events_global.GID_0.unique()]
     if iso3_filter:
         valid_iso3_list = [iso3 for iso3 in valid_iso3_list if iso3 == iso3_filter]
+=======
+    logger.info("Loading global grid and shapefile data...")
+    gdf_global, shp_global = load_data()
+    shp_global["iso3"] = shp_global.GID_0
+
+    logger.info("Loading global impact metadata...")
+    all_events_global = load_impact_data()
+
+    # Filter ISO3 list based on events present in impact dataset
+    valid_iso3_list = [iso3 for iso3 in ISO3_LIST if iso3 in all_events_global.GID_0.unique()]
+>>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
 
     out_dir = OUTPUT_DIR / "IBTRACS" / "standard"
     out_dir.mkdir(parents=True, exist_ok=True)
 
+<<<<<<< HEAD
     print(f"Starting windfield processing for {len(valid_iso3_list)} countries...")
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(
                 process_single_country, iso3, out_dir, gdf_global, all_events_global, shp_global
+=======
+    logger.info(f"Starting windfield processing for {len(valid_iso3_list)} countries...")
+    # CLIMADA's TC computations are CPU-bound NumPy work — processes give
+    # actual parallelism whereas threads were blocked by the GIL.
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                process_single_country, iso3, out_dir, gdf_global, all_events_global
+>>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
             ): iso3
             for iso3 in valid_iso3_list
         }
@@ -288,7 +316,14 @@ def generate_all_wind_features(max_workers=5, iso3_filter=None):
                 future.result()
                 print(f"Done: {iso3}")
             except Exception as e:
-                print(f"Error processing wind data for {iso3}: {e}")
+                logger.error(f"Error processing wind data for {iso3}: {e}", exc_info=True)
+
 
 if __name__ == "__main__":
+<<<<<<< HEAD
     generate_all_wind_features(max_workers=1, iso3_filter="ATG")
+=======
+    from src.utils.logging_setup import configure_logging
+    configure_logging()
+    generate_all_wind_features(max_workers=5)
+>>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f

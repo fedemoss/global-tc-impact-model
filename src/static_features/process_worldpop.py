@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 """Aggregate the WorldPop 1km mosaics to grid-cell level, one file per anchor year.
 
 Output: OUTPUT_DIR/Worldpop/grid_data/population_grid_{iso3}_{year}.csv
@@ -23,12 +24,17 @@ Two defects of the single-year version are fixed.
 import logging
 import os
 from concurrent.futures import ProcessPoolExecutor
+=======
+import logging
+from concurrent.futures import ThreadPoolExecutor
+>>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import rasterio
 from rasterio.mask import mask
+<<<<<<< HEAD
 from shapely.geometry import Polygon
 
 from src.config import (
@@ -42,14 +48,14 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 def worldpop_raster_path(year):
     return INPUT_DIR / "Worldpop" / f"ppp_{year}_1km_Aggregated.tif"
 
+=======
 
-def adjust_longitude(polygon):
-    coords = list(polygon.exterior.coords)
-    for i in range(len(coords)):
-        lon, lat = coords[i]
-        if lon > 180:
-            coords[i] = (lon - 360, lat)
-    return Polygon(coords)
+from src.config import INPUT_DIR, OUTPUT_DIR, ISO3_LIST
+from src.utils.geo_utils import adjust_longitude
+
+logger = logging.getLogger(__name__)
+>>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
+
 
 
 def calculate_population(geometry, raster):
@@ -67,6 +73,7 @@ def calculate_population(geometry, raster):
 def _process_chunk(args):
     iso3, chunk_id, chunk_grid, raster_path = args
     try:
+<<<<<<< HEAD
         # One handle per worker: GDAL datasets are not safe to share
         with rasterio.open(raster_path) as raster:
             grid = chunk_grid.to_crs(raster.crs)
@@ -136,14 +143,39 @@ def process_worldpop_year(grid, year, iso3_list):
 
     if failed:
         logging.error(f"[{year}] countries left incomplete: {sorted(failed)}")
+=======
+        output_path = out_folder / f"population_grid_{iso}.csv"
+        if output_path.exists():
+            return f"File already exists for {iso}, skipping."
+
+        grid_country = grid[grid.iso3 == iso].reset_index(drop=True)
+
+        with rasterio.open(raster_path) as raster:
+            pop_country = pop_to_grid(grid_country, raster)
+
+        pop_country.to_csv(output_path, index=False)
+        return f"Processed {iso} successfully."
+    except Exception as e:
+        logger.error(f"Error processing {iso}: {e}", exc_info=True)
+        return f"Error processing {iso}."
+>>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
 
 
 def process_all_worldpop():
     grid = gpd.read_file(INPUT_DIR / "GRID" / "merged" / "global_grid_land_overlap.gpkg")
+<<<<<<< HEAD
     if "iso3" not in grid.columns:
         grid["iso3"] = grid["GID_0"]
     grid["geometry"] = grid["geometry"].apply(adjust_longitude)
     grid = grid[["id", "iso3", "geometry"]]
+=======
+    grid["GID_0"] = grid["iso3"]
+    needs_wrap = grid.geometry.apply(
+        lambda g: any(lon > 180 for lon, _ in g.exterior.coords) if g is not None else False
+    )
+    if needs_wrap.any():
+        grid.loc[needs_wrap, "geometry"] = grid.loc[needs_wrap, "geometry"].apply(adjust_longitude)
+>>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
 
     iso3_list = [iso for iso in resolve_iso3_list() if iso in set(grid.iso3)]
     print(f"Grid loaded: {len(grid)} cells, {len(iso3_list)} countries")
@@ -151,6 +183,19 @@ def process_all_worldpop():
     for year in POP_ANCHOR_YEARS:
         process_worldpop_year(grid, year, iso3_list)
 
+<<<<<<< HEAD
 
 if __name__ == "__main__":
     process_all_worldpop()
+=======
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [executor.submit(process_country, iso, grid, raster_path, out_folder) for iso in valid_iso3_list]
+        for future in futures:
+            logger.info(future.result())
+
+
+if __name__ == "__main__":
+    from src.utils.logging_setup import configure_logging
+    configure_logging()
+    process_all_worldpop()
+>>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f

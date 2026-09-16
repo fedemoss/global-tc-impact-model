@@ -1,10 +1,23 @@
-import os
 import gc
 import logging
+
+import joblib
 import pandas as pd
+
 from src.config import OUTPUT_DIR
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+
+def _save_final_model(model, out_dir):
+    """Persist trained components so SHAP can load them later."""
+    if hasattr(model, "classifier"):
+        joblib.dump(model.classifier, out_dir / "classifier.joblib")
+    if hasattr(model, "regressor"):
+        joblib.dump(model.regressor, out_dir / "regressor.joblib")
+    if hasattr(model, "model"):
+        joblib.dump(model.model, out_dir / "model.joblib")
+
 
 def run_loocv_pipeline(df, events, model, strategy="global", output_folder="loocv_results"):
     """
@@ -23,7 +36,7 @@ def run_loocv_pipeline(df, events, model, strategy="global", output_folder="looc
         
         # Skip if already processed
         if out_file.exists():
-            logging.info(f"Skipping event {ev}: file already exists.")
+            logger.info(f"Skipping event {ev}: file already exists.")
             continue
 
         # -------------------------------------------------------------
@@ -34,7 +47,7 @@ def run_loocv_pipeline(df, events, model, strategy="global", output_folder="looc
             # Train only on events strictly before the test event's date
             df_train = df[(df["DisNo."] != ev) & (df["date"] < event_date)].copy()
             if df_train.empty:
-                logging.info(f"Skipping {ev} — no past data to train on for walk-forward.")
+                logger.info(f"Skipping {ev} — no past data to train on for walk-forward.")
                 continue
                 
         elif strategy == "geo_constrained":
@@ -42,7 +55,7 @@ def run_loocv_pipeline(df, events, model, strategy="global", output_folder="looc
             # Train only on events in the exact same basin
             df_train = df[(df["DisNo."] != ev) & (df["cyclone_basin"] == event_basin)].copy()
             if df_train.empty:
-                logging.info(f"Skipping {ev} — no other events in basin {event_basin} to train on.")
+                logger.info(f"Skipping {ev} — no other events in basin {event_basin} to train on.")
                 continue
                 
         elif strategy == "global":
@@ -67,10 +80,25 @@ def run_loocv_pipeline(df, events, model, strategy="global", output_folder="looc
 
         # Save to disk
         df_preds.to_csv(out_file, index=False)
-        logging.info(f"Saved predictions for event {ev} using {strategy} strategy -> {out_file}")
+        logger.info(f"Saved predictions for event {ev} using {strategy} strategy -> {out_file}")
 
         # Memory management per iteration
         del df_train, df_test, df_preds
         gc.collect()
 
-    logging.info(f"LOOCV ({strategy}) processing completed for all events.")
+    # Persist a final fit on the full dataset so SHAP/interpretability
+    # has a model to load. The LOOCV folds themselves stay event-isolated.
+    try:
+        model.train_and_predict(df.copy(), df.head(1).copy())
+        _save_final_model(model, out_dir)
+        logger.info(f"Final model artifacts written to {out_dir}")
+    except Exception as e:
+        logger.warning(f"Could not persist final model artifacts: {e}")
+
+    # Concatenate per-event predictions into a single compiled file used by SHAP.
+    pred_files = sorted(out_dir.glob("predictions_event_*.csv"))
+    if pred_files:
+        compiled = pd.concat([pd.read_csv(f) for f in pred_files], ignore_index=True)
+        compiled.to_csv(out_dir / "all_predictions_compiled.csv", index=False)
+
+    logger.info(f"LOOCV ({strategy}) processing completed for all events.")
