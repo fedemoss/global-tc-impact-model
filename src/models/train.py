@@ -92,7 +92,18 @@ def execute_training_run(model_name, strategy, aggregate_to_adm1=False):
     logger.info(f"Level: {'ADM1' if aggregate_to_adm1 else 'Grid'}")
 
     df = prepare_data(aggregate_to_adm1=aggregate_to_adm1)
-    events = df["DisNo."].unique()
+
+    # One fold per PHYSICAL CYCLONE (IBTrACS sid); a multi-country storm's
+    # records all leave together. These are the paper's three sample sizes.
+    sid_map = df[["DisNo.", "sid"]].drop_duplicates()
+    assert sid_map["sid"].notna().all(), "rows without a sid cannot be grouped by cyclone"
+    assert (sid_map.groupby("DisNo.")["sid"].nunique() == 1).all(), \
+        "a DisNo. mapping to several sids needs resolving before grouped CV"
+    events = df["sid"].unique()
+    logger.info(
+        f"{len(events)} physical cyclones / {df['DisNo.'].nunique()} country-event "
+        f"records / {len(df):,} rows"
+    )
 
     if model_name == "historical":
         model = HistoricalModel()
