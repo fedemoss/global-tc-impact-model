@@ -1,12 +1,18 @@
+import logging
 import os
-import numpy as np
+
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 import xarray as xr
-from pathlib import Path
-from shapely.geometry import Point, Polygon
+from shapely.geometry import Point
 from sklearn.neighbors import NearestNeighbors
+
 from src.config import INPUT_DIR, OUTPUT_DIR
+from src.utils.geo_utils import adjust_longitude
+
+logger = logging.getLogger(__name__)
+
 
 def create_geodataframe_from_nc(dataset):
     lon = dataset["station_x_coordinate"].values
@@ -15,14 +21,6 @@ def create_geodataframe_from_nc(dataset):
 
     points = [Point(lon[i], lat[i]) for i in range(len(lon))]
     return gpd.GeoDataFrame({"storm_tide_rp_0010": storm_tide_10}, geometry=points, crs="EPSG:4326")
-
-def adjust_longitude(polygon):
-    coords = list(polygon.exterior.coords)
-    for i in range(len(coords)):
-        lon, lat = coords[i]
-        if lon > 180:
-            coords[i] = (lon - 360, lat)
-    return Polygon(coords)
 
 def spatial_interpolation(df, columns_to_interpolate):
     df = df.copy()
@@ -80,7 +78,7 @@ def process_storm_surge_risk(gdf, gdf_coastline, grid_cells, output_csv, R=0.5):
 
     os.makedirs(os.path.dirname(output_csv), exist_ok=True)
     storm_surges_complete_df.to_csv(output_csv, index=False)
-    print(f"Storm surge risk data saved to: {output_csv}")
+    logger.info(f"Storm surge risk data saved to: {output_csv}")
 
 
 
@@ -98,8 +96,12 @@ def process_all_surges():
     # 2. Load and prepare the global land grid
     grid_path = INPUT_DIR / "GRID" / "merged" / "global_grid_land_overlap.gpkg"
     grid_cells = gpd.read_file(grid_path)
-    grid_cells["geometry"] = grid_cells["geometry"].apply(adjust_longitude)
-    
+    needs_wrap = grid_cells.geometry.apply(
+        lambda g: any(lon > 180 for lon, _ in g.exterior.coords) if g is not None else False
+    )
+    if needs_wrap.any():
+        grid_cells.loc[needs_wrap, "geometry"] = grid_cells.loc[needs_wrap, "geometry"].apply(adjust_longitude)
+
     # Standardize country identifier
     grid_cells["GID_0"] = grid_cells["iso3"] if "iso3" in grid_cells.columns else grid_cells["GID_0"]
 
@@ -125,7 +127,6 @@ def process_all_surges():
     # 4. Filter the grid to coastal geometries for surge processing
     # We subset the main grid based on the IDs collected from the SRTM features
     gdf_coastline = grid_cells[grid_cells["id"].isin(coastal_ids)].copy()
-    gdf_coastline["geometry"] = gdf_coastline["geometry"].apply(adjust_longitude)
 
     # 5. Execute spatial risk assessment and export results
     output_csv = OUTPUT_DIR / "StormSurges" / "grid_data" / "global_grid_storm_surges_risk.csv"
@@ -134,4 +135,6 @@ def process_all_surges():
     process_storm_surge_risk(gdf_surges, gdf_coastline, grid_cells, output_csv)
 
 if __name__ == "__main__":
+    from src.utils.logging_setup import configure_logging
+    configure_logging()
     process_all_surges()

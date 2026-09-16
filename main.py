@@ -1,7 +1,14 @@
 import argparse
 import logging
 import sys
+<<<<<<< HEAD
 from src.config import INPUT_DIR, IMERG_PRODUCT, IMERG_PRODUCTS
+=======
+from pathlib import Path
+
+from src.config import INPUT_DIR
+from src.utils.logging_setup import configure_logging
+>>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
 
 # Collectors
 from src.collectors.general_collector import download_all_public_data
@@ -31,26 +38,27 @@ from src.dataset_builder import compile_global_dataset
 from src.models.train import execute_training_run
 from src.interpretability.shap_analysis import main_shap_analysis
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
 
 def main():
     parser = argparse.ArgumentParser(description="Global TC Impact Data Factory")
-    
+
     # Operation Mode
+<<<<<<< HEAD
     parser.add_argument("--build-dataset", action="store_true",
                         help="Generate the full training_dataset.parquet (implied when no "
                              "--run-* flag is given, and by --stage)")
     parser.add_argument("--run-models", action="store_true", 
+=======
+    parser.add_argument("--build-dataset", action="store_true", default=False,
+                        help="Generate the full training_dataset.parquet")
+    parser.add_argument("--run-models", action="store_true",
+>>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
                         help="Train the 2-stage XGBoost model")
     parser.add_argument("--run-interpretability", action="store_true",
                         help="Run SHAP analysis on trained models")
 
     # Selective Stage (for debugging)
-    parser.add_argument("--stage", type=str, 
+    parser.add_argument("--stage", type=str,
                         choices=["collect", "grid", "static", "dynamic", "build"])
 
     # Rainfall source. Both routes produce the same `rainfall_max_24h` feature
@@ -66,12 +74,24 @@ def main():
 
     args = parser.parse_args()
 
+<<<<<<< HEAD
     # Build the dataset when asked for explicitly (--build-dataset or --stage),
     # or when nothing else was requested -- so a bare `python main.py` is still
     # the full factory, but `--run-models` alone no longer downloads the world.
     build_dataset = args.build_dataset or args.stage is not None or not (
         args.run_models or args.run_interpretability
     )
+=======
+    # If no operation mode is specified, default to building the dataset
+    if not (args.build_dataset or args.run_models or args.run_interpretability or args.stage):
+        args.build_dataset = True
+
+    # Selecting a stage implies dataset building
+    if args.stage:
+        args.build_dataset = True
+
+    configure_logging()
+>>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
 
     # --- DATA PIPELINE ---
     if build_dataset:

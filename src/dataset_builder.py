@@ -1,4 +1,5 @@
 import logging
+<<<<<<< HEAD
 import os
 import pandas as pd
 import geopandas as gpd
@@ -55,6 +56,14 @@ def load_grid_gid_mapping(iso3):
 
     df_grid_map[["GID_1", "GID_2"]] = df_grid_map[["GID_1", "GID_2"]].astype(object)
     return df_grid_map
+=======
+
+import pandas as pd
+
+from src.config import INPUT_DIR, OUTPUT_DIR, ISO3_LIST
+>>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
+
+logger = logging.getLogger(__name__)
 
 def load_static_features(iso3):
     """
@@ -232,7 +241,10 @@ def compile_global_dataset():
     out_path = INPUT_DIR / "model_input_dataset"
     out_path.mkdir(parents=True, exist_ok=True)
     df_master.to_parquet(out_path / "training_dataset.parquet", index=False)
-    print(f"Master training dataset saved. Total rows: {len(df_master)}")
+    logger.info(f"Master training dataset saved. Total rows: {len(df_master)}")
+
 
 if __name__ == "__main__":
+    from src.utils.logging_setup import configure_logging
+    configure_logging()
     compile_global_dataset()

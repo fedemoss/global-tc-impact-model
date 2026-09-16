@@ -93,7 +93,11 @@ FEATURES = [
 NON_CONTEMPLATED_FEATURES = [
     "flood_risk",     # Excluded: Basins < 500km2 missing in 22/72 countries
     "shdi",           # Note: SHDI used where available, but missing in 19/72 countries
+<<<<<<< HEAD
     "track_distance", # Excluded as its highly correlated with windspeed
+=======
+    "track_distance", # Excluded as it is highly correlated with windspeed
+>>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
 ]
 
 # ISO3 Country List

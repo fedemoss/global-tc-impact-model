@@ -1,9 +1,22 @@
+<<<<<<< HEAD
 import os
 import numpy as np
+=======
+import logging
+
+>>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
 import pandas as pd
+
 from src.config import INPUT_DIR, OUTPUT_DIR
 
+<<<<<<< HEAD
 def create_past_events_feature(df, grid_data_path):
+=======
+logger = logging.getLogger(__name__)
+
+
+def create_past_events_feature(impact_data_path, grid_data_path):
+>>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
     """
     Calculates the N_events_5_years feature: for each event, the number of
     previous events that hit the same country in the preceding 5 years.
@@ -74,6 +87,7 @@ def _build_impact_with_dates(iso3_filter=None):
 
 def generate_all_historical_features(iso3_filter=None):
     """Entry point to execute historical feature generation."""
+<<<<<<< HEAD
     grid_path = INPUT_DIR / "GRID" / "merged" / "global_grid_centroids.csv"
 
     out_dir = OUTPUT_DIR / "features"
@@ -90,8 +104,32 @@ def generate_all_historical_features(iso3_filter=None):
 
     print("Generating N_events_5_years feature...")
     historical_df = create_past_events_feature(df, grid_path)
+=======
+    impact_path = INPUT_DIR / "EMDAT" / "global_grid_impact_data.csv"
+    grid_path = INPUT_DIR / "GRID" / "merged" / "global_grid_municipality_info.csv"
+
+    # Write to OUTPUT_DIR / "dynamic_features" — matches the path read by
+    # dataset_builder.compile_global_dataset.
+    out_dir = OUTPUT_DIR / "dynamic_features"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / "historical_events_feature.csv"
+
+    if out_file.exists():
+        logger.info("Historical feature dataset already exists.")
+        return
+
+    logger.info("Generating N_events_5_years feature...")
+    historical_df = create_past_events_feature(impact_path, grid_path)
+>>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
     historical_df.to_csv(out_file, index=False)
-    print(f"Saved historical features to {out_file}")
+    logger.info(f"Saved historical features to {out_file}")
+
 
 if __name__ == "__main__":
+<<<<<<< HEAD
     generate_all_historical_features(iso3_filter="ATG")
+=======
+    from src.utils.logging_setup import configure_logging
+    configure_logging()
+    generate_all_historical_features()
+>>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f

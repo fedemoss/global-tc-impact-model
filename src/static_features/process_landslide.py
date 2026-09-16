@@ -1,8 +1,14 @@
+import logging
+
 import geopandas as gpd
 import numpy as np
 import rasterio
 from rasterstats import zonal_stats
+
 from src.config import INPUT_DIR, OUTPUT_DIR
+
+logger = logging.getLogger(__name__)
+
 
 def aggregate_raster_to_grid(raster_path, grid):
     with rasterio.open(raster_path) as src:
@@ -24,7 +30,7 @@ def process_all_landslide():
 
     raster_path = INPUT_DIR / "LandSlides" / "landslide_data.tif"
 
-    print("Processing Landslide Risk data...")
+    logger.info("Processing Landslide Risk data...")
     grid_landslide = aggregate_raster_to_grid(raster_path, grid_global)[["id", "iso3", "landslide_risk_sum"]]
 
     out_folder = OUTPUT_DIR / "LandSlides"
@@ -32,7 +38,10 @@ def process_all_landslide():
     out_file_path = out_folder / "global_grid_landslide_risk.csv"
 
     grid_landslide.to_csv(out_file_path, index=False)
-    print(f"Saved Landslide Risk data to {out_file_path}")
+    logger.info(f"Saved Landslide Risk data to {out_file_path}")
+
 
 if __name__ == "__main__":
+    from src.utils.logging_setup import configure_logging
+    configure_logging()
     process_all_landslide()
