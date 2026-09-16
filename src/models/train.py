@@ -52,7 +52,6 @@ def prepare_data(aggregate_to_adm1=False):
         .groupby(["DisNo.", "GID_0"]).mean()
         .reset_index(name="proportion_affected_gid1")
     )
-<<<<<<< HEAD
     # Countries with no usable GID_1 breakdown (see dataset_builder.py's national
     # fallback, e.g. ATG) are evaluated at GID_0 — a single "region" per event is
     # always 100% affected by construction, so the proportion check doesn't apply.
@@ -65,25 +64,10 @@ def prepare_data(aggregate_to_adm1=False):
     valid_events = list(set(events_to_consider_c1) & set(events_to_consider_c2) & set(events_to_consider_c3))
     df = df[df["DisNo."].isin(valid_events)].drop_duplicates()
 
-    # Add Date Info
-    emdat = pd.read_csv(INPUT_DIR / "EMDAT" / "emdat.csv")
-    emdat_red = emdat[["DisNo.", 'Start Year', 'Start Month', 'Start Day']].drop_duplicates()
-    emdat_red["Start Day"] = emdat_red["Start Day"].fillna(1)
-    emdat_red["date"] = pd.to_datetime(dict(year=emdat_red["Start Year"], month=emdat_red["Start Month"], day=emdat_red["Start Day"].astype(int)), errors="coerce")
-
-    df = df.merge(emdat_red[["DisNo.", "date"]], on="DisNo.", how="left").drop_duplicates()
+    # Attach event-level date BEFORE aggregation so it can serve as a groupby key.
+    df = _attach_event_date(df).drop_duplicates()
 
     # Conditionally Aggregate to ADM1
-=======
-    events_to_consider_c3 = proportions[proportions.proportion_affected_gid1 < 1]["DisNo."].unique()
-
-    valid_events = list(set(events_to_consider_c1) & set(events_to_consider_c2) & set(events_to_consider_c3))
-    df = df[df["DisNo."].isin(valid_events)].drop_duplicates()
-
-    # Attach event-level date BEFORE aggregation so it can serve as a groupby key.
-    df = _attach_event_date(df)
-
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
     if aggregate_to_adm1:
         agg_dict = {f: "mean" for f in FEATURES if f not in ["wind_speed", "rainfall_max_24h", "population", "N_events_5_years"]}
         agg_dict.update({
@@ -94,17 +78,10 @@ def prepare_data(aggregate_to_adm1=False):
             "Total Affected": "max",
             "N_events_5_years": "max",
         })
-<<<<<<< HEAD
-
-        df = df.groupby(["DisNo.", "sid", "level", "GID_0", "GID_1", "iso3", "cyclone_basin", "date"]).agg(agg_dict).reset_index()
-
-    return df
-=======
         groupby_keys = ["DisNo.", "sid", "level", "GID_0", "GID_1", "iso3", "cyclone_basin", "date"]
         df = df.groupby(groupby_keys, dropna=False).agg(agg_dict).reset_index()
 
     return df.drop_duplicates()
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
 
 
 def execute_training_run(model_name, strategy, aggregate_to_adm1=False):

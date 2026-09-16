@@ -1,15 +1,7 @@
 import logging
 
 import geopandas as gpd
-<<<<<<< HEAD
 from src.config import INPUT_DIR, OUTPUT_DIR, resolve_iso3_list
-=======
-import pandas as pd
-
-from src.config import INPUT_DIR, ISO3_LIST
-
-logger = logging.getLogger(__name__)
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
 
 def group_shp(gdf_subset):
     """Aggregates geometries based on GID hierarchy using unary_union."""

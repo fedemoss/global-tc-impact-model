@@ -1,5 +1,4 @@
 import logging
-<<<<<<< HEAD
 import os
 import pandas as pd
 import geopandas as gpd
@@ -56,12 +55,6 @@ def load_grid_gid_mapping(iso3):
 
     df_grid_map[["GID_1", "GID_2"]] = df_grid_map[["GID_1", "GID_2"]].astype(object)
     return df_grid_map
-=======
-
-import pandas as pd
-
-from src.config import INPUT_DIR, OUTPUT_DIR, ISO3_LIST
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
 
 logger = logging.getLogger(__name__)
 

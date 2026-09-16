@@ -4,16 +4,10 @@ import logging
 import os
 
 import geopandas as gpd
-<<<<<<< HEAD
 import numpy as np
 from pathlib import Path
 from src.config import INPUT_DIR, OUTPUT_DIR, resolve_iso3_list
 from src.utils.exposure import load_population_by_year
-=======
-import pandas as pd
-
-from src.config import INPUT_DIR, OUTPUT_DIR
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
 
 logger = logging.getLogger(__name__)
 
@@ -347,11 +341,5 @@ def process_emdat_events(iso3_filter=None):
     calculate_grid_impact(iso3_filter=iso3_filter)
 
 if __name__ == "__main__":
-<<<<<<< HEAD
     # Example (case study)
     process_emdat_events(iso3_filter="ATG")
-=======
-    from src.utils.logging_setup import configure_logging
-    configure_logging()
-    process_emdat_events()
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f

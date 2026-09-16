@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 """Downloading IMERG rainfall granules from NASA PPS.
 
 Two products are supported, selected by `IMERG_PRODUCT` in src/config.py:
@@ -25,17 +24,6 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 from src.config import INPUT_DIR, IMERG_PRODUCT, IMERG_PRODUCTS, NASA_PPS_BASE_URL
-=======
-import logging
-import os
-import time
-
-import pandas as pd
-import requests
-from bs4 import BeautifulSoup
-
-from src.config import INPUT_DIR
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +122,6 @@ def download_gpm_late_run(start_date, end_date, typhoon_name, max_workers=6):
             month = f"{date.month:02d}"
             year = date.year
 
-<<<<<<< HEAD
             url = gis_url(date)
             zip_files = list_files(url=url, session=session, suffix=".zip")
 
@@ -225,15 +212,3 @@ def download_gpm_for_storm(start_date, end_date, typhoon_name, product=None):
     if product == "daily":
         return download_gpm_daily_run(start_date, end_date, typhoon_name)
     return download_gpm_late_run(start_date, end_date, typhoon_name)
-=======
-        for tiff_file in filtered_files:
-            file_name = tiff_file.split("/")[-1]
-            file_path = download_path / file_name
-            
-            if not file_path.exists():
-                r = requests.get(tiff_file, auth=(USERNAME, PASSWORD))
-                time.sleep(0.2)
-                with open(file_path, "wb") as f:
-                    f.write(r.content)
-    logger.info(f"Finished downloading rainfall data for {typhoon_name}")
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f

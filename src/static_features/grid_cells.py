@@ -3,12 +3,7 @@ import logging
 import geopandas as gpd
 import numpy as np
 from shapely.geometry import box
-<<<<<<< HEAD
 from src.config import INPUT_DIR, resolve_iso3_list
-=======
-
-from src.config import INPUT_DIR, ISO3_LIST
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +30,6 @@ def filter_grid_by_land(grid_gdf, shp_path):
     Clips the global grid to landmasses using GADM boundaries.
     Filters by the study's ISO3 list to optimize processing.
     """
-<<<<<<< HEAD
     print("Loading GADM boundaries for land-overlap filtering...")
     world = gpd.read_file(shp_path)
 
@@ -50,17 +44,6 @@ def filter_grid_by_land(grid_gdf, shp_path):
 
     print("Performing spatial join (filtering grid to land overlap)...")
     grid_land = gpd.sjoin(grid_gdf, world_dissolved[['GID_0', 'geometry']], how="inner", predicate="intersects")
-=======
-    logger.info("Loading GADM boundaries for land-overlap filtering...")
-    # Load the global GeoPackage downloaded by general_collector.py
-    world = gpd.read_file(shp_path)
-    
-    # Filter for countries in the study consideration list
-    world = world[world['GID_0'].isin(ISO3_LIST)]
-    
-    logger.info("Performing spatial join (filtering grid to land overlap)...")
-    grid_land = gpd.sjoin(grid_gdf, world[['GID_0', 'geometry']], how="inner", predicate="intersects")
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
     
     # Clean up and add unique IDs
     grid_land = grid_land.drop(columns=["index_right"])
