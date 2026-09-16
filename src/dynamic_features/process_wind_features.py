@@ -1,5 +1,5 @@
 import logging
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
 import geopandas as gpd
 import numpy as np
@@ -9,6 +9,9 @@ from climada.hazard import Centroids, TCTracks, TropCyclone
 from shapely.geometry import LineString
 
 from src.config import INPUT_DIR, OUTPUT_DIR, resolve_iso3_list
+
+logger = logging.getLogger(__name__)
+
 
 def windfield_to_grid(tc, tracks, grids, cent_indices=None):
     """From IbTracks tracks, create wind_speed and track_distance features and aggregate to grid cells."""

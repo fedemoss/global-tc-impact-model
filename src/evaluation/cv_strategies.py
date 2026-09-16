@@ -75,6 +75,11 @@ def run_loocv_pipeline(df, events, model, strategy="global", output_folder="looc
 
         # Test set is always the isolated cyclone
         df_test = df[df[event_col] == ev].copy()
+        if df_test.empty:
+            raise ValueError(
+                f"no rows with {event_col} == {ev!r} -- `events` must be "
+                f"df[{event_col!r}].unique(), not another identifier"
+            )
 
         # A physical cyclone must never sit on both sides of a fold.
         overlap = set(df_train[event_col].unique()) & set(df_test[event_col].unique())

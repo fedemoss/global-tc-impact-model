@@ -5,6 +5,7 @@ import os
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 from pathlib import Path
 from src.config import INPUT_DIR, OUTPUT_DIR, resolve_iso3_list
 from src.utils.exposure import load_population_by_year
