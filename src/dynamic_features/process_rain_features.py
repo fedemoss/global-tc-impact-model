@@ -5,7 +5,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import geopandas as gpd
 import numpy as np
 import pandas as pd
-<<<<<<< HEAD
 import rasterio
 from rasterio.transform import rowcol
 from shapely.geometry import Polygon
@@ -28,13 +27,6 @@ def _load_dotenv():
             os.environ.setdefault(key.strip(), val.strip())
 
 _load_dotenv()
-=======
-import rioxarray as rxr
-from rasterstats import zonal_stats
-
-from src.config import INPUT_DIR, OUTPUT_DIR, ISO3_LIST
-from src.utils.geo_utils import adjust_longitude
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +84,6 @@ def _zonal_mean_for_raster(grid, raster):
     return [s["mean"] if s["mean"] is not None else np.nan for s in stats]
 
 
-<<<<<<< HEAD
 def _cell_pixel_index(grid, reference_tif):
     """Row/col of the IMERG pixel holding each grid cell, computed once per storm.
 
@@ -239,35 +230,6 @@ def create_rainfall_dataset(grid_global, df_meta, iso3, sid, typhoon_name, produ
         day_grid["mean"] = np.where(daily_has_data, daily_totals, np.nan)
         day_grid["date"] = date_str
         file_df = pd.concat([file_df, day_grid], axis=0)
-=======
-def create_rainfall_dataset(grid_global, df_meta, iso3, sid, typhoon_name):
-    """Generate per-grid daily rainfall features from local GPM IMERG TIFFs."""
-    date_list = get_date_list(df_meta=df_meta, sid=sid, days_to_landfall=2)
-    local_gpm_dir = INPUT_DIR / "gpm_data" / typhoon_name
-
-    if not local_gpm_dir.exists():
-        raise FileNotFoundError(f"GPM directory missing for {typhoon_name}: {local_gpm_dir}")
-
-    grid = grid_global[grid_global.iso3 == iso3].copy()
-    if grid.empty:
-        raise ValueError(f"No grid cells found for {iso3}")
-
-    file_df = []
-    for date_str in date_list:
-        for file_path in local_gpm_dir.glob(f"*{date_str}*.tif"):
-            raster = rxr.open_rasterio(file_path, masked=True).rio.write_crs(4326).squeeze(drop=True)
-            grid_for_raster = grid.to_crs(raster.rio.crs) if grid.crs != raster.rio.crs else grid
-
-            means = _zonal_mean_for_raster(grid_for_raster, raster)
-            df_day = pd.DataFrame({
-                "id": grid_for_raster["id"].values,
-                "iso3": grid_for_raster["iso3"].values,
-                # Source unit is 1/10 mm/hr per IMERG late-run gis convention.
-                "mean": np.array(means, dtype=float) / 10.0,
-                "date": date_str,
-            })
-            file_df.append(df_day)
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
 
     if not file_df:
         raise FileNotFoundError(f"No local GPM rasters matched dates for {typhoon_name} ({sid})")
@@ -290,22 +252,16 @@ def _process_storm(args):
         logger.error(f"Failed to process {iso3}, {sid}: {e}")
         return None, pd.DataFrame([{"iso3": iso3, "sid": sid}])
 
-<<<<<<< HEAD
 def process_country_rainfall(iso3, metadata_global, grid_global, out_dir, product=None):
     df_rainfall_total = []
     not_working_cases = []
     
-=======
-
-def process_country_rainfall(iso3, metadata_global, grid_global, out_dir):
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
     out_file = out_dir / f"rainfall_data_{iso3}.csv"
     if out_file.exists():
         logger.info(f"Skipping {iso3}: file already exists")
         return
 
     metadata_country = metadata_global[metadata_global.iso3 == iso3]
-<<<<<<< HEAD
     if not metadata_country.empty:
         with ThreadPoolExecutor(max_workers=10) as executor:
             args_list = [
@@ -313,10 +269,6 @@ def process_country_rainfall(iso3, metadata_global, grid_global, out_dir):
                 for _, row in metadata_country.drop_duplicates('sid').iterrows()
             ]
             results = executor.map(_process_storm, args_list)
-=======
-    if metadata_country.empty:
-        return
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
 
     df_rainfall_total = []
     not_working_cases = []
@@ -396,7 +348,6 @@ def run_single_storm(iso3, sid, product=None):
     out_dir = OUTPUT_DIR / "PPS"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-<<<<<<< HEAD
     df_rainfall = create_rainfall_dataset(grid_global, df_meta, iso3, sid, typhoon_name, product)
     df_rainfall = df_rainfall.fillna(0)
     out_file = out_dir / f"rainfall_data_{iso3}_{sid}.csv"
@@ -483,28 +434,6 @@ def generate_all_rain_features(max_workers=4, product=None):
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(process_country_rainfall, iso3, metadata_global, grid_global, out_dir, product): iso3
-=======
-    logger.info("Loading global grid and applying longitude adjustments...")
-    grid_global = gpd.read_file(INPUT_DIR / "GRID" / "merged" / "global_grid_land_overlap.gpkg")
-    grid_global["iso3"] = grid_global.GID_0
-    needs_wrap = grid_global.geometry.apply(
-        lambda g: any(lon > 180 for lon, _ in g.exterior.coords) if g is not None else False
-    )
-    if needs_wrap.any():
-        grid_global.loc[needs_wrap, "geometry"] = grid_global.loc[needs_wrap, "geometry"].apply(adjust_longitude)
-
-    logger.info("Loading global metadata...")
-    metadata_global = pd.read_csv(INPUT_DIR / "IBTRACS" / "merged" / "meta_data.csv")
-    metadata_global = metadata_global.drop("DisNo.", axis=1).drop_duplicates()
-    metadata_global["iso3"] = metadata_global.GID_0
-
-    valid_iso3_list = [iso3 for iso3 in ISO3_LIST if iso3 in metadata_global["iso3"].unique()]
-
-    logger.info(f"Starting rainfall processing for {len(valid_iso3_list)} countries...")
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(process_country_rainfall, iso3, metadata_global, grid_global, out_dir): iso3
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
             for iso3 in valid_iso3_list
         }
         for future in as_completed(futures):
@@ -517,10 +446,4 @@ def generate_all_rain_features(max_workers=4, product=None):
 
 
 if __name__ == "__main__":
-<<<<<<< HEAD
     run_single_storm(iso3="ATG", sid="2008287N15291")
-=======
-    from src.utils.logging_setup import configure_logging
-    configure_logging()
-    generate_all_rain_features(max_workers=4)
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f

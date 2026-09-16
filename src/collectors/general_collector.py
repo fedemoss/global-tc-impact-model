@@ -10,14 +10,9 @@ from bs4 import BeautifulSoup
 from tqdm import tqdm
 
 from src.config import (
-<<<<<<< HEAD
     INPUT_DIR, GADM_BASE_URL, WORLDPOP_URL_TEMPLATE, POP_ANCHOR_YEARS,
     LANDSLIDE_URL, STORM_SURGE_URL, JRC_SMOD_URL_TEMPLATE, SMOD_EPOCH_YEARS,
     SRTM_BASE_URL, FLOOD_RISK_URL,
-=======
-    INPUT_DIR, GADM_BASE_URL, WORLDPOP_URL, LANDSLIDE_URL,
-    STORM_SURGE_URL, JRC_SMOD_URL, SRTM_BASE_URL, FLOOD_RISK_URL,
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
     SHDI_URL, GAUL_ADM2_URL
 )
 
@@ -43,10 +38,6 @@ def download_file(url, out_path, stream=True, verify=True):
             out_path.unlink()
         return False
 
-<<<<<<< HEAD
-=======
-
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
 def collect_gadm():
     """Scrapes gadm.org for the latest global geodatabase, downloads, and unzips it."""
     logger.info("Scraping GADM for geodatabase link...")
@@ -84,18 +75,12 @@ def collect_gadm():
         logger.error("No geodatabase link found on GADM page.")
 
 
-<<<<<<< HEAD
 def collect_gaul():
     """
     Downloads the GAUL 2015 ADM2 shapefile required for 
     geolocating EM-DAT administrative units.
     """
     print("Collecting GAUL/GUIL ADM2 administrative boundaries...")
-=======
-def collect_guil():
-    """Downloads the GAUL 2015 ADM2 shapefile for EM-DAT geolocation."""
-    logger.info("Collecting GAUL/GUIL ADM2 administrative boundaries...")
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
     out_path = INPUT_DIR / "SHP" / "global_shapefile_GUIL_adm2.zip"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 

@@ -181,7 +181,6 @@ def process_country(iso, global_grid, global_shp, tiles_df, out_path, data_path)
     grid_c = global_grid[global_grid.iso3 == iso].copy()
     shp_c = global_shp[global_shp.GID_0 == iso].copy()
 
-<<<<<<< HEAD
     # Retrieve pre-calculated tiles from tiles_df ---
     iso_tiles_data = tiles_df[tiles_df['iso3'] == iso]
     
@@ -192,24 +191,12 @@ def process_country(iso, global_grid, global_shp, tiles_df, out_path, data_path)
         tiles = iso_tiles_data['tiles'].values[0] 
 
     # Validate tiles against the filesystem
-=======
-    if grid_c.empty:
-        logger.warning(f"No grid data for {iso}.")
-        return
-
-    extent = grid_c.total_bounds
-    tiles = get_overlap_files(extent)
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
     tile_paths = [data_path / t for t in tiles if (data_path / t).exists()]
 
     if not tile_paths:
         logger.warning(f"No tiles found for {iso}.")
         df_terrain = grid_c[["id", "geometry"]].copy()
-<<<<<<< HEAD
         for col in ["mean_elev", "mean_slope", "mean_rug"]: 
-=======
-        for col in ["mean_elev", "mean_slope", "mean_rug"]:
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
             df_terrain[col] = np.nan
     else:
         workers = max(1, min(len(tile_paths), cpu_count() // 2))
@@ -256,7 +243,6 @@ def process_all_srtm():
     grid["GID_0"] = grid["iso3"]
 
     shp = gpd.read_file(INPUT_DIR / "SHP" / "gadm_410.gdb")
-<<<<<<< HEAD
     
     # Pre-calculate country tiles to handle antimeridian cases 
     logging.info("Pre-calculating SRTM tile overlaps for all countries...")
@@ -271,8 +257,6 @@ def process_all_srtm():
             process_country(iso, grid, shp, tiles_df, out_path, data_path)
         except Exception as e:
             logging.error(f"Failed to process {iso}: {e}")
-=======
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
 
     for iso in grid.iso3.unique():
         try:
@@ -282,7 +266,6 @@ def process_all_srtm():
 
     logger.info("Compiling global SRTM dataset...")
     all_csvs = list(out_path.glob("srtm_grid_data_*.csv"))
-<<<<<<< HEAD
     
     if all_csvs:
         global_df = pd.concat([pd.read_csv(f) for f in all_csvs], ignore_index=True)
@@ -290,12 +273,6 @@ def process_all_srtm():
         logging.info("Global SRTM processing complete.")
     else:
         logging.warning("No CSV files found to compile. Check for processing errors.")
-=======
-    global_df = pd.concat([pd.read_csv(f) for f in all_csvs], ignore_index=True)
-    global_df.to_csv(out_path / "global_srtm_grid_data.csv", index=False)
-    logger.info("Global SRTM processing complete.")
-
->>>>>>> 2aaf917cea7caa556c4f871607c174621f1bc43f
 
 if __name__ == "__main__":
     from src.utils.logging_setup import configure_logging
