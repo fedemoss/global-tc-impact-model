@@ -60,10 +60,7 @@ def smod_reprojected_path(epoch):
     return INPUT_DIR / "JRC" / "reprojected" / f"GHS_SMOD_{epoch}_wgs84.tif"
 
 
-from src.config import INPUT_DIR, OUTPUT_DIR, ISO3_LIST
 from src.utils.geo_utils import adjust_longitude
-
-logger = logging.getLogger(__name__)
 
 
 

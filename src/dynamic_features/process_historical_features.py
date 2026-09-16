@@ -1,8 +1,12 @@
+import logging
 import os
+
 import numpy as np
 import pandas as pd
 
 from src.config import INPUT_DIR, OUTPUT_DIR
+
+logger = logging.getLogger(__name__)
 
 def create_past_events_feature(df, grid_data_path):
     """
