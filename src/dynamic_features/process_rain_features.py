@@ -10,7 +10,6 @@ import pandas as pd
 import rasterio
 from rasterio.transform import rowcol
 from rasterstats import zonal_stats
-from shapely.geometry import Polygon
 
 from src.utils.geo_utils import adjust_longitude
 
@@ -75,18 +74,22 @@ def get_date_list(df_meta, sid, days_to_landfall=2):
     return pd.date_range(start_date.iloc[0], end_date.iloc[0]).strftime("%Y%m%d").tolist()
 
 
-def _zonal_mean_for_raster(grid, raster):
-    """Compute the mean raster value within each grid polygon."""
-    affine = raster.rio.transform()
-    arr = raster.values
-    if arr.ndim == 3:
-        arr = arr[0]
-    nodata = raster.rio.nodata
+def _zonal_mean_from_array(grid, arr, transform, all_touched=False):
+    """Mean of `arr` over each grid polygon, for the `sampling="zonal"` route.
+
+    `arr` is a whole-day accumulation already converted to millimetres, so this
+    runs once per day rather than once per granule. NaN cells (no valid IMERG
+    retrieval) are masked so they are excluded from the mean instead of
+    poisoning it.
+    """
     stats = zonal_stats(
-        grid.geometry, arr, affine=affine, stats=["mean"],
-        nodata=nodata, all_touched=True,
+        grid.geometry, np.ma.masked_invalid(arr), affine=transform,
+        stats=["mean"], all_touched=all_touched,
     )
-    return [s["mean"] if s["mean"] is not None else np.nan for s in stats]
+    return np.array(
+        [s["mean"] if s["mean"] is not None else np.nan for s in stats],
+        dtype="float64",
+    )
 
 
 def _cell_pixel_index(grid, reference_tif):
@@ -134,6 +137,28 @@ def _read_granule(file_path, rows, cols, inside, to_mm):
     return out
 
 
+def _read_granule_array(file_path, to_mm):
+    """The whole granule as millimetres, NaN where there is no valid retrieval.
+
+    Same conversion as `_read_granule`, but keeps the raster grid instead of
+    sampling it, so the day can be accumulated in raster space and aggregated
+    to polygons once.
+    """
+    with rasterio.open(file_path) as src:
+        arr = src.read(1)
+        nodata = src.nodata
+        transform = src.transform
+
+    vals = arr.astype("float64")
+    valid = vals < IMERG_FILL_VALUE
+    if nodata is not None:
+        valid &= vals != nodata
+
+    out = np.full(vals.shape, np.nan, dtype="float64")
+    out[valid] = to_mm(vals[valid])
+    return out, transform
+
+
 def half_hour_raw_to_mm(raw):
     """One half-hourly `total.accum` granule -> millimetres in that half hour."""
     return raw / IMERG_SCALE_FACTOR
@@ -166,7 +191,8 @@ def _granules_by_date(date_list, typhoon_name, product):
     return source_dir, by_date
 
 
-def create_rainfall_dataset(grid_global, df_meta, iso3, sid, typhoon_name, product=None):
+def create_rainfall_dataset(grid_global, df_meta, iso3, sid, typhoon_name, product=None,
+                            sampling="pixel", all_touched=False):
     """Maximum daily rainfall accumulation per grid cell over the event window.
 
     Reads the local IMERG granules downloaded by the PPS collector, accumulates
@@ -202,7 +228,7 @@ def create_rainfall_dataset(grid_global, df_meta, iso3, sid, typhoon_name, produ
         d: len(f) for d, f in day_files_by_date.items() if len(f) != expected_per_day
     }
     if incomplete:
-        logging.warning(
+        logger.warning(
             f"{iso3} {sid} ({typhoon_name}): incomplete IMERG days, accumulation "
             f"under-counted - " + ", ".join(
                 f"{d}: {n}/{HALF_HOURS_PER_DAY} granules" for d, n in sorted(incomplete.items())
@@ -210,7 +236,7 @@ def create_rainfall_dataset(grid_global, df_meta, iso3, sid, typhoon_name, produ
         )
     missing_dates = [d for d in date_list if d not in day_files_by_date]
     if missing_dates:
-        logging.warning(
+        logger.warning(
             f"{iso3} {sid} ({typhoon_name}): no IMERG data at all for {missing_dates}"
         )
 
@@ -218,28 +244,43 @@ def create_rainfall_dataset(grid_global, df_meta, iso3, sid, typhoon_name, produ
     first_file = day_files_by_date[next(iter(day_files_by_date))][0]
     rows, cols, inside = _cell_pixel_index(grid, first_file)
 
-    file_df = pd.DataFrame()
+    day_frames = []
     for date_str, day_files in day_files_by_date.items():
-        daily_totals = np.zeros(len(grid), dtype="float64")
-        daily_has_data = np.zeros(len(grid), dtype=bool)
-
         # One granule for "daily", 48 for "half_hourly" - summing is correct in
         # both cases because each granule covers a disjoint slice of the day
-        for file_path in day_files:
-            granule_mm = _read_granule(file_path, rows, cols, inside, to_mm)
-            observed = ~np.isnan(granule_mm)
-            daily_totals[observed] += granule_mm[observed]
-            daily_has_data |= observed
+        if sampling == "zonal":
+            day_sum = day_obs = transform = None
+            for file_path in day_files:
+                granule_mm, transform = _read_granule_array(file_path, to_mm)
+                observed = ~np.isnan(granule_mm)
+                if day_sum is None:
+                    day_sum = np.zeros(granule_mm.shape, dtype="float64")
+                    day_obs = np.zeros(granule_mm.shape, dtype=bool)
+                day_sum[observed] += granule_mm[observed]
+                day_obs |= observed
+            cell_mm = _zonal_mean_from_array(
+                grid, np.where(day_obs, day_sum, np.nan), transform,
+                all_touched=all_touched,
+            )
+        else:
+            daily_totals = np.zeros(len(grid), dtype="float64")
+            daily_has_data = np.zeros(len(grid), dtype=bool)
+            for file_path in day_files:
+                granule_mm = _read_granule(file_path, rows, cols, inside, to_mm)
+                observed = ~np.isnan(granule_mm)
+                daily_totals[observed] += granule_mm[observed]
+                daily_has_data |= observed
+            cell_mm = np.where(daily_has_data, daily_totals, np.nan)
 
         day_grid = grid[["id", "iso3"]].copy()
-        day_grid["mean"] = np.where(daily_has_data, daily_totals, np.nan)
+        day_grid["mean"] = cell_mm
         day_grid["date"] = date_str
-        file_df = pd.concat([file_df, day_grid], axis=0)
+        day_frames.append(day_grid)
 
-    if not file_df:
+    if not day_frames:
         raise FileNotFoundError(f"No local GPM rasters matched dates for {typhoon_name} ({sid})")
 
-    long_df = pd.concat(file_df, ignore_index=True)
+    long_df = pd.concat(day_frames, ignore_index=True)
     day_wide = long_df.pivot_table(index=["id", "iso3"], columns="date", values="mean", aggfunc="max")
     day_wide["rainfall_max_24h"] = day_wide.max(axis=1)
     day_wide = day_wide.reset_index()
@@ -248,16 +289,18 @@ def create_rainfall_dataset(grid_global, df_meta, iso3, sid, typhoon_name, produ
 
 
 def _process_storm(args):
-    iso3, sid, typhoon_name, metadata_country, grid_global, product = args
+    iso3, sid, typhoon_name, metadata_country, grid_global, product, sampling = args
     df_meta = metadata_country[metadata_country.sid == sid]
     try:
-        df_rainfall = create_rainfall_dataset(grid_global, df_meta, iso3, sid, typhoon_name, product)
+        df_rainfall = create_rainfall_dataset(
+            grid_global, df_meta, iso3, sid, typhoon_name, product, sampling=sampling)
         return df_rainfall.fillna(0), None
     except Exception as e:
         logger.error(f"Failed to process {iso3}, {sid}: {e}")
         return None, pd.DataFrame([{"iso3": iso3, "sid": sid}])
 
-def process_country_rainfall(iso3, metadata_global, grid_global, out_dir, product=None):
+def process_country_rainfall(iso3, metadata_global, grid_global, out_dir, product=None,
+                            sampling="pixel"):
     df_rainfall_total = []
     not_working_cases = []
     
@@ -270,26 +313,16 @@ def process_country_rainfall(iso3, metadata_global, grid_global, out_dir, produc
     if not metadata_country.empty:
         with ThreadPoolExecutor(max_workers=10) as executor:
             args_list = [
-                (iso3, row.sid, row.typhoon, metadata_country, grid_global, product)
+                (iso3, row.sid, row.typhoon, metadata_country, grid_global, product, sampling)
                 for _, row in metadata_country.drop_duplicates('sid').iterrows()
             ]
             results = executor.map(_process_storm, args_list)
 
-    df_rainfall_total = []
-    not_working_cases = []
-
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        args_list = [
-            (iso3, row.sid, row.typhoon, metadata_country, grid_global)
-            for _, row in metadata_country.drop_duplicates("sid").iterrows()
-        ]
-        results = executor.map(_process_storm, args_list)
-
-    for df_rainfall, not_working_case in results:
-        if df_rainfall is not None:
-            df_rainfall_total.append(df_rainfall)
-        if not_working_case is not None:
-            not_working_cases.append(not_working_case)
+            for df_rainfall, not_working_case in results:
+                if df_rainfall is not None:
+                    df_rainfall_total.append(df_rainfall)
+                if not_working_case is not None:
+                    not_working_cases.append(not_working_case)
 
     if not_working_cases:
         nodata_path = out_dir / f"nodata_rainfall_{iso3}.csv"
@@ -323,7 +356,7 @@ def _load_grid_global():
     grid["geometry"] = grid["geometry"].apply(adjust_longitude)
     return grid
 
-def run_single_storm(iso3, sid, product=None):
+def run_single_storm(iso3, sid, product=None, sampling="pixel"):
     """Download GPM data (if absent) and compute rainfall features for one storm."""
     from src.collectors.pps_collector import download_gpm_for_storm
 
@@ -341,7 +374,7 @@ def run_single_storm(iso3, sid, product=None):
     typhoon_name = storm.iloc[0]["typhoon"]
     date_list = get_date_list(df_meta, sid, days_to_landfall=2)
 
-    logging.info(f"Downloading {product} GPM data for {typhoon_name} ({date_list[0]} – {date_list[-1]})...")
+    logger.info(f"Downloading {product} GPM data for {typhoon_name} ({date_list[0]} – {date_list[-1]})...")
     download_gpm_for_storm(
         start_date=pd.to_datetime(date_list[0]),
         end_date=pd.to_datetime(date_list[-1]),
@@ -353,11 +386,12 @@ def run_single_storm(iso3, sid, product=None):
     out_dir = OUTPUT_DIR / "PPS"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    df_rainfall = create_rainfall_dataset(grid_global, df_meta, iso3, sid, typhoon_name, product)
+    df_rainfall = create_rainfall_dataset(
+        grid_global, df_meta, iso3, sid, typhoon_name, product, sampling=sampling)
     df_rainfall = df_rainfall.fillna(0)
     out_file = out_dir / f"rainfall_data_{iso3}_{sid}.csv"
     df_rainfall.to_csv(out_file, index=False)
-    logging.info(f"Saved: {out_file}")
+    logger.info(f"Saved: {out_file}")
     return df_rainfall
 
 def _local_data_is_complete(local_gpm_dir, date_list, expected_per_day=None):
@@ -404,7 +438,7 @@ def _ensure_local_gpm_data(iso3, metadata_country, product=None):
         if _local_data_is_complete(local_gpm_dir, date_list, expected_per_day):
             continue
         try:
-            logging.info(f"Downloading {product} GPM data for {iso3}, {row.typhoon} ({row.sid})...")
+            logger.info(f"Downloading {product} GPM data for {iso3}, {row.typhoon} ({row.sid})...")
             download_gpm_for_storm(
                 start_date=pd.to_datetime(date_list[0]),
                 end_date=pd.to_datetime(date_list[-1]),
@@ -414,31 +448,32 @@ def _ensure_local_gpm_data(iso3, metadata_country, product=None):
         except Exception as e:
             logging.error(f"Failed to download GPM data for {iso3}, {row.sid} ({row.typhoon}): {e}")
 
-def generate_all_rain_features(max_workers=4, product=None):
+def generate_all_rain_features(max_workers=4, product=None, sampling="pixel"):
     out_dir = OUTPUT_DIR / "PPS"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     product = _resolve_product(product)
-    print(f"IMERG product: {product}")
+    logger.info(f"IMERG product: {product}")
 
-    print("Loading global grid and applying longitude adjustments...")
+    logger.info("Loading global grid and applying longitude adjustments...")
     grid_global = _load_grid_global()
 
-    print("Loading global metadata...")
+    logger.info("Loading global metadata...")
     metadata_global = _load_metadata_global()
 
     valid_iso3_list = [iso3 for iso3 in resolve_iso3_list() if iso3 in metadata_global["iso3"].unique()]
 
-    print("Ensuring local GPM data is available for all storms (downloading missing storms)...")
+    logger.info("Ensuring local GPM data is available for all storms (downloading missing storms)...")
     for iso3 in valid_iso3_list:
         if (out_dir / f"rainfall_data_{iso3}.csv").exists():
             continue  # already processed, no need to (re)download
         _ensure_local_gpm_data(iso3, metadata_global[metadata_global.iso3 == iso3], product)
 
-    print(f"Starting rainfall processing for {len(valid_iso3_list)} countries...")
+    logger.info(f"Starting rainfall processing for {len(valid_iso3_list)} countries...")
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
-            executor.submit(process_country_rainfall, iso3, metadata_global, grid_global, out_dir, product): iso3
+            executor.submit(process_country_rainfall, iso3, metadata_global,
+                            grid_global, out_dir, product, sampling): iso3
             for iso3 in valid_iso3_list
         }
         for future in as_completed(futures):
