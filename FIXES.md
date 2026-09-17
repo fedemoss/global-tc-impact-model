@@ -137,3 +137,61 @@ assert GLOBAL_METRIC_EPSG == 6933
 ```
 
 A full pipeline run requires Python 3.10+ (per `requirements.txt`) and the external data described in the main `README.md`.
+
+---
+
+# Validation outcomes (Federico, 2026-09-17)
+
+Every claim above was checked against the code and, where data allowed, against
+the actual rasters. Summary of what held up and what did not.
+
+## Confirmed and kept
+
+| Claim | Outcome |
+|---|---|
+| 2.1 missing comma | Real bug, fixed. **No model impact**: `NON_CONTEMPLATED_FEATURES` is read by nothing — exclusion happens by omission from `FEATURES`. Documentation only; no re-run needed. |
+| 2.4 flood tile selection | Right diagnosis (centre-in-buffer missed edge tiles), but the replacement parsed the tile latitude as the *southern* edge when it is the *northern* edge. Corrected and verified against all 271 tiles. |
+| 2.7 `--build-dataset` always on | Real bug, fixed correctly. |
+| 2.9 / 2.10 bare `except`, streaming | Real improvements, kept. |
+| 2.11 SHAP artifacts | Real gap, fixed. Note the final fit is wrapped in `try/except` that only warns, so a failure leaves SHAP without a model. |
+| 2.12 `date` collision | Real bug, fixed correctly. |
+| 1 / 3.x logging, `geo_utils`, `__init__.py` | Kept, with `main.py` fixed to actually call `configure_logging()` — without it the entry point ran silent. |
+
+## Corrected
+
+**2.3 coast-length projection — reverted.** `EPSG:6933` is an equal-**area**
+projection and does not preserve length. East–west scale error vs a local UTM
+zone: −13% at the equator, −9% at 17°N, +22% at 45°N, +51% at 55°N. Measured on
+Antigua's actual coastline: `EPSG:25394` 426.4 km, `EPSG:6933` 427.9 km, local
+UTM 20N (truth) 425.0 km — so the existing 25394 was accurate to 0.3% and the
+replacement was *less* accurate. The underlying point stands (a Philippines CRS
+used globally is wrong in principle), but the correct fix is a per-country UTM
+zone or a geodesic length, not another single global CRS.
+
+## Claims with no code behind them
+
+**2.5 rainfall `zonal_stats`** — `_zonal_mean_for_raster` was defined but never
+called; the pixel-index path still ran. Now implemented properly as an opt-in
+`sampling="zonal"` route. Measured on ATG `2008287N15291`: **pixel and zonal
+agree to 0.000 mm**. The grid is 0.1° and so is IMERG, so exactly one pixel
+covers each cell — the cell mean *is* that pixel. The "first pixel, not the
+mean" critique only bites where cells and pixels differ in size. Default stays
+`pixel` (same answer, far faster).
+
+**2.8 `ProcessPoolExecutor`** — imported but never used; `ThreadPoolExecutor`
+still ran. The concern is legitimate, so it is now actually applied — via
+fork-inherited globals, because passing the global grid and GADM shapefile as
+task arguments would pickle them once per country and cost more than the GIL.
+
+**2.6 historical features path** — the described mismatch does not exist:
+producer and consumer both use `OUTPUT_DIR/features/`. There *is* a real
+adjacent bug: a run with `iso3_filter` writes `historical_events_feature_<ISO>.csv`
+while `dataset_builder` only reads the unsuffixed file, so the output is
+silently ignored. Both sides now warn.
+
+## Run-blockers introduced by the 1a6b1bb merge (fixed)
+
+Rainfall raised `ValueError: truth value of a DataFrame is ambiguous` on **every
+storm**; `process_country_rainfall` and `process_all_srtm` each carried a
+duplicated block whose second copy called into a mismatched signature. See the
+commit "Fix the four run-blockers in the KK-fixes branch".
