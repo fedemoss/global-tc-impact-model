@@ -84,25 +84,39 @@ def prepare_data(aggregate_to_adm1=False):
     return df.drop_duplicates()
 
 
-def execute_training_run(model_name, strategy, aggregate_to_adm1=False):
-    """Orchestrates the data prep and LOOCV execution for a specific model and strategy."""
+def execute_training_run(model_name, strategy, aggregate_to_adm1=False, event_col="DisNo."):
+    """Orchestrates the data prep and LOOCV execution for a specific model and strategy.
+
+    `event_col` is the LOOCV grouping unit: "DisNo." (the paper's country-event
+    record, default) or "sid" (the physical cyclone -- see run_loocv_pipeline).
+    """
     logger.info("--- Starting Run ---")
     logger.info(f"Model: {model_name}")
     logger.info(f"Strategy: {strategy}")
     logger.info(f"Level: {'ADM1' if aggregate_to_adm1 else 'Grid'}")
+    logger.info(f"LOOCV unit: {event_col}")
 
     df = prepare_data(aggregate_to_adm1=aggregate_to_adm1)
 
-    # One fold per PHYSICAL CYCLONE (IBTrACS sid); a multi-country storm's
-    # records all leave together. These are the paper's three sample sizes.
-    sid_map = df[["DisNo.", "sid"]].drop_duplicates()
-    assert sid_map["sid"].notna().all(), "rows without a sid cannot be grouped by cyclone"
-    assert (sid_map.groupby("DisNo.")["sid"].nunique() == 1).all(), \
-        "a DisNo. mapping to several sids needs resolving before grouped CV"
-    events = df["sid"].unique()
+    if event_col not in df.columns:
+        raise ValueError(f"event_col {event_col!r} is not a column of the dataset")
+    if df[event_col].isna().any():
+        raise ValueError(f"rows with a null {event_col} cannot be assigned to a fold")
+
+    if event_col == "sid":
+        # Grouping by physical cyclone only makes sense if each country-event
+        # record belongs to exactly one storm.
+        per_disno = df.groupby("DisNo.")["sid"].nunique()
+        if (per_disno > 1).any():
+            raise ValueError(
+                "these DisNo. map to more than one sid and must be resolved "
+                f"before grouping by cyclone: {sorted(per_disno[per_disno > 1].index)}"
+            )
+
+    events = df[event_col].unique()
     logger.info(
-        f"{len(events)} physical cyclones / {df['DisNo.'].nunique()} country-event "
-        f"records / {len(df):,} rows"
+        f"{df['sid'].nunique()} physical cyclones / {df['DisNo.'].nunique()} country-event "
+        f"records / {len(df):,} rows -> {len(events)} folds grouped by {event_col}"
     )
 
     if model_name == "historical":
@@ -121,6 +135,11 @@ def execute_training_run(model_name, strategy, aggregate_to_adm1=False):
 
     level_str = "adm1" if aggregate_to_adm1 else "grid"
     output_folder = f"model_output/{model_name}_{strategy}_{level_str}"
+    if event_col != "DisNo.":
+        # Keep non-default grouping in its own directory: fold filenames are
+        # built from the grouping key, so mixing them would corrupt the
+        # resume check and the compiled predictions file.
+        output_folder += f"_by_{event_col}"
 
     run_loocv_pipeline(
         df=df,
@@ -128,6 +147,7 @@ def execute_training_run(model_name, strategy, aggregate_to_adm1=False):
         model=model,
         strategy=strategy,
         output_folder=output_folder,
+        event_col=event_col,
     )
 
 
