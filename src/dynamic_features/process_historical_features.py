@@ -85,6 +85,13 @@ def generate_all_historical_features(iso3_filter=None):
     out_dir.mkdir(parents=True, exist_ok=True)
     suffix  = f"_{iso3_filter}" if iso3_filter else ""
     out_file = out_dir / f"historical_events_feature{suffix}.csv"
+    # dataset_builder reads the unsuffixed file only, so a filtered run writes a
+    # file nothing consumes and N_events_5_years silently stays absent.
+    if suffix:
+        logger.warning(
+            f"iso3_filter={iso3_filter!r} writes {out_file.name}, but dataset_builder "
+            f"reads historical_events_feature.csv -- this output will not be picked up"
+        )
 
     if out_file.exists():
         print(f"Historical feature dataset already exists: {out_file}")
