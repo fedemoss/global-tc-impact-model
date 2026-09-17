@@ -20,14 +20,24 @@ def _save_final_model(model, out_dir):
 
 
 def run_loocv_pipeline(df, events, model, strategy="global", output_folder="loocv_results",
-                       event_col="sid"):
+                       event_col="DisNo."):
     """
     Executes LOOCV strategies based exactly on the original paper parameters.
 
-    The unit left out per fold is the PHYSICAL CYCLONE (IBTrACS `sid`), not the
-    EM-DAT country-event record: a storm that hits several countries contributes
-    several `DisNo.` records, and grouping by `sid` keeps all of them on one
-    side of every fold. `events` must therefore be `df[event_col].unique()`.
+    `event_col` selects the unit left out per fold, and `events` must always be
+    `df[event_col].unique()`:
+
+    - "DisNo." (default) -- the EM-DAT country-event record, as in the paper.
+    - "sid"              -- the physical cyclone (IBTrACS storm id). A storm
+      that hits several countries contributes several `DisNo.` records, so
+      grouping by `sid` keeps all of them on one side of every fold. This is
+      stricter, and only differs from the default once the dataset contains
+      multi-country storms.
+
+    Note that the per-fold output filenames are built from `events`, so the two
+    settings write different filenames -- use a separate `output_folder` when
+    switching, or old folds will be picked up by the resume check and mixed into
+    `all_predictions_compiled.csv`.
 
     Strategies:
     - 'global': Standard LOOCV (train on all except test cyclone).
