@@ -30,6 +30,7 @@ from src.dynamic_features.process_historical_features import generate_all_histor
 from src.dataset_builder import compile_global_dataset
 from src.models.train import execute_training_run
 from src.interpretability.shap_analysis import main_shap_analysis
+from src.utils.logging_setup import configure_logging
 
 
 def main():
@@ -60,6 +61,10 @@ def main():
                               "dates are shared between storms."))
 
     args = parser.parse_args()
+
+    # Without this the root logger sits at WARNING and the entire pipeline runs
+    # silent -- every logger.info below and in every module goes nowhere.
+    configure_logging()
 
     # Build the dataset when asked for explicitly (--build-dataset or --stage),
     # or when nothing else was requested -- so a bare `python main.py` is still
