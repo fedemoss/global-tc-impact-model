@@ -1,5 +1,6 @@
 import logging
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import geopandas as gpd
 import numpy as np
@@ -258,15 +259,32 @@ def process_single_country(iso3, out_dir, gdf_global, all_events_global, shp_glo
         df_meta = create_metadata(tracks=tracks, all_events=all_events, shp=shp_global, iso3=iso3)
         df_meta.to_csv(meta_file, index=False)
 
+# Set once in the parent before the pool is created; with the "fork" start
+# method the workers inherit these copy-on-write instead of having the global
+# grid and the GADM shapefile pickled and shipped for every country.
+_WIND_CTX = {}
+
+
+def _wind_worker(iso3):
+    """ProcessPool entry point: reads the big frames from inherited globals."""
+    return process_single_country(
+        iso3,
+        _WIND_CTX["out_dir"],
+        _WIND_CTX["gdf_global"],
+        _WIND_CTX["all_events_global"],
+        _WIND_CTX["shp_global"],
+    )
+
+
 def generate_all_wind_features(max_workers=5, iso3_filter=None):
     """Entry point to execute wind processing."""
-    print("Loading global grid centroids...")
+    logger.info("Loading global grid centroids...")
     gdf_global = load_data()
 
-    print("Loading global impact metadata...")
+    logger.info("Loading global impact metadata...")
     all_events_global = load_impact_data()
 
-    print("Loading country shapefile for landfall detection...")
+    logger.info("Loading country shapefile for landfall detection...")
     shp_global = load_shapefile()
 
     valid_iso3_list = [iso3 for iso3 in resolve_iso3_list() if iso3 in all_events_global.GID_0.unique()]
@@ -276,20 +294,43 @@ def generate_all_wind_features(max_workers=5, iso3_filter=None):
     out_dir = OUTPUT_DIR / "IBTRACS" / "standard"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Starting windfield processing for {len(valid_iso3_list)} countries...")
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(
-                process_single_country, iso3, out_dir, gdf_global, all_events_global, shp_global
-            ): iso3
-            for iso3 in valid_iso3_list
-        }
+    logger.info(f"Starting windfield processing for {len(valid_iso3_list)} countries...")
 
+    # TropCyclone.from_tracks is CPU-bound numpy work, so threads serialise on
+    # the GIL. Processes give real parallelism -- but only via fork-inherited
+    # globals: passing gdf_global/shp_global as task arguments would pickle the
+    # global grid and the GADM shapefile once per country and cost more than the
+    # GIL ever did.
+    _WIND_CTX.update(
+        out_dir=out_dir, gdf_global=gdf_global,
+        all_events_global=all_events_global, shp_global=shp_global,
+    )
+
+    if max_workers == 1:
+        # Keep the single-worker path in-process: easier to debug, and it avoids
+        # paying for a fork to run one country at a time.
+        for iso3 in valid_iso3_list:
+            try:
+                _wind_worker(iso3)
+                logger.info(f"Done: {iso3}")
+            except Exception as e:
+                logger.error(f"Error processing wind data for {iso3}: {e}", exc_info=True)
+        return
+
+    if mp.get_start_method(allow_none=True) != "fork":
+        logger.warning(
+            "the 'fork' start method is unavailable; wind workers will pickle the "
+            "global grid per country. Reduce max_workers if memory is tight."
+        )
+
+    with ProcessPoolExecutor(max_workers=max_workers,
+                             mp_context=mp.get_context("fork")) as executor:
+        futures = {executor.submit(_wind_worker, iso3): iso3 for iso3 in valid_iso3_list}
         for future in as_completed(futures):
             iso3 = futures[future]
             try:
                 future.result()
-                print(f"Done: {iso3}")
+                logger.info(f"Done: {iso3}")
             except Exception as e:
                 logger.error(f"Error processing wind data for {iso3}: {e}", exc_info=True)
 
