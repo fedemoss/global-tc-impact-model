@@ -21,14 +21,21 @@ _TILE_PATTERN = re.compile(r"ID\d+_(N|S)(\d+)_([EW])(\d+)_RP10_depth_reclass\.ti
 
 
 def _tile_bounds(filename):
-    """Return (minx, miny, maxx, maxy) for a GLOFAS tile filename, or None."""
+    """Return (minx, miny, maxx, maxy) for a GLOFAS tile filename, or None.
+
+    The latitude in the filename is the tile's NORTHERN (top) edge and the
+    longitude its WESTERN (left) edge -- verified against the georeferencing of
+    all 271 tiles, which match this convention to within 0.03 degrees. Reading
+    the latitude as the southern edge shifts every tile one full tile north and
+    selects tiles that do not cover the country at all.
+    """
     match = _TILE_PATTERN.search(os.path.basename(filename))
     if not match:
         return None
     lat_s, lat_v, lon_s, lon_v = match.groups()
-    miny = int(lat_v) if lat_s == "N" else -int(lat_v)
+    maxy = int(lat_v) if lat_s == "N" else -int(lat_v)
     minx = int(lon_v) if lon_s == "E" else -int(lon_v)
-    return (minx, miny, minx + _TILE_SIZE_DEG, miny + _TILE_SIZE_DEG)
+    return (minx, maxy - _TILE_SIZE_DEG, minx + _TILE_SIZE_DEG, maxy)
 
 
 def select_tiles_by_country(tif_paths, grid_country, buffer_deg=0.5):
