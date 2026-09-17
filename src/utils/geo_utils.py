@@ -3,8 +3,11 @@ from __future__ import annotations
 
 from shapely.geometry import Polygon
 
-# EPSG:6933 — World Cylindrical Equal Area (meters). Suitable for global
-# length/area calculations where local UTM zones are impractical.
+# EPSG:6933 — World Cylindrical Equal Area (meters). Suitable for global AREA
+# calculations only. It is NOT suitable for lengths or distances: being
+# equal-area it distorts scale badly with latitude (east-west error from -13% at
+# the equator to +51% at 55N). For lengths use a local UTM zone or a geodesic
+# calculation.
 GLOBAL_METRIC_EPSG = 6933
 
 
