@@ -177,6 +177,13 @@ def build_country_dataset(iso3, df_meta, df_impact_master):
         df_hist = pd.read_csv(hist_path)
         df_dyn = df_dyn.merge(df_hist[df_hist.iso3 == iso3], on=["id", "iso3", "DisNo."], how="left")
         df_dyn["N_events_5_years"] = df_dyn["N_events_5_years"].fillna(0)
+    else:
+        # Silently skipping this merge is how N_events_5_years goes missing from
+        # the training set without anything failing.
+        logger.warning(
+            f"{hist_path} not found -- N_events_5_years will be absent for {iso3}. "
+            f"Run generate_all_historical_features() with no iso3_filter."
+        )
 
     # 7. Merge Static Features
     df_static = load_static_features(iso3)
