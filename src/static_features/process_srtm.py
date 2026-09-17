@@ -13,11 +13,7 @@ from rasterstats import zonal_stats
 from sklearn.neighbors import NearestNeighbors
 
 from src.config import INPUT_DIR, OUTPUT_DIR
-from src.utils.geo_utils import (
-    GLOBAL_METRIC_EPSG,
-    adjust_longitude,
-    is_antimeridian_crossing,
-)
+from src.utils.geo_utils import adjust_longitude, is_antimeridian_crossing
 
 logger = logging.getLogger(__name__)
 
@@ -156,9 +152,13 @@ def get_coast_features(shp_country, grid_country):
     coast_gdf = gpd.GeoDataFrame(geometry=coastline, crs=grid_country.crs)
     grid_line = gpd.overlay(coast_gdf, grid_country, how="intersection")
 
-    # World Cylindrical Equal Area — preserves length-scale globally and avoids
-    # the local-only EPSG:25394 (Philippines) used previously.
-    grid_line["coast_length_meters"] = grid_line.to_crs(epsg=GLOBAL_METRIC_EPSG).length
+    # NOTE: EPSG:6933 was proposed here as a "global" replacement, but it is an
+    # equal-AREA projection and does not preserve length: its east-west scale
+    # error runs from -13% at the equator to +51% at 55N. Measured against a
+    # local UTM zone, EPSG:25394 reproduces Antigua's coastline to 0.3% while
+    # EPSG:6933 is off by 9%. Keep 25394 until this is replaced by a per-country
+    # UTM or a geodesic length, which is the only correct global fix.
+    grid_line["coast_length_meters"] = grid_line.to_crs(epsg=25394).length
 
     merged = grid_country[["id"]].merge(grid_line[["id", "coast_length_meters"]], on="id", how="left").fillna(0)
     merged["with_coast"] = (merged["coast_length_meters"] > 0).astype(int)
@@ -255,12 +255,6 @@ def process_all_srtm():
         try:
             # Pass tiles_df as an argument to the modified process_country function
             process_country(iso, grid, shp, tiles_df, out_path, data_path)
-        except Exception as e:
-            logging.error(f"Failed to process {iso}: {e}")
-
-    for iso in grid.iso3.unique():
-        try:
-            process_country(iso, grid, shp, out_path, data_path)
         except Exception as e:
             logger.error(f"Failed to process {iso}: {e}", exc_info=True)
 
