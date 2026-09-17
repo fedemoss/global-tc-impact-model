@@ -89,7 +89,12 @@ FEATURES = [
 ]
 
 
-# Non-contemplated features (Discussed in paper but excluded from global training)
+# Non-contemplated features (discussed in the paper but excluded from global
+# training). DOCUMENTATION ONLY -- nothing reads this list. Exclusion happens by
+# omission from FEATURES above, which is the only list the model, the SHAP
+# analysis and the hyperparameter search consume. It previously read
+# ["flood_risk", "shditrack_distance"] because of a missing comma, which changed
+# nothing for the same reason.
 NON_CONTEMPLATED_FEATURES = [
     "flood_risk",     # Excluded: Basins < 500km2 missing in 22/72 countries
     "shdi",           # Note: SHDI used where available, but missing in 19/72 countries
