@@ -16,6 +16,7 @@ The core of this project is the **Data Factory**, which automates the collection
 │   ├── collectors/           # Data acquisition (general_collector.py, pps_collector.py)
 │   ├── static_features/      # Spatial Processing (grid_cells.py, process_gadm.py, etc.)
 │   ├── dynamic_features/     # Event-Based Processing (process_emdat.py, process_wind.py, etc.)
+│   ├── evaluation/           # Metrics & event-level bootstrap CIs (bootstrap.py)
 │   ├── models/               # Two-Stage XGBoost & Baselines (train.py)
 │   ├── evaluation/           # LOOCV Pipeline & Metrics
 │   ├── interpretability/     # SHAP Analysis & Visualization
@@ -160,7 +161,20 @@ The winner is written to `data/model_hyperparameters.json` and **loaded automati
 
 > The development subset in `ISO3_LIST` (ATG/FJI/HTI) is far too small for a search — every event fails the selection filters. Point `--input` at the full dataset.
 
-### 4. Model Training & Interpretability
+### 4. Validation Metrics with Confidence Intervals
+```bash
+# Point estimates only (as before)
+python -m src.evaluation.metrics
+
+# Add event-level bootstrap confidence intervals
+python -m src.evaluation.metrics --bootstrap --n-boot 1000
+```
+
+`src/evaluation/bootstrap.py` attaches nonparametric 95% CIs to every validation metric by resampling **whole cyclones**, not ADM1 rows. That distinction is what makes the intervals meaningful: ADM1 rows from one storm share a hazard field and a single EM-DAT report, so they are not independent observations — resampling rows treats correlated data as independent and yields intervals that are far too narrow. On representative data the event-level interval comes out roughly **1.8× wider** than a row-level one, and the wider number is the honest one.
+
+Undefined metrics are treated differently in the point estimate and in the replicates, on purpose: the point estimate scores an undefined ratio as 0.0 (matching `sklearn`'s `zero_division=0`, so headline numbers stay conventional), while a replicate where the metric is undefined is excluded from the percentile and counted in `<metric>_n_undefined_boot`. Check that column before quoting an interval — one built on few valid replicates says little. Intervals are percentile-method, so not bias- or skew-corrected (no BCa).
+
+### 5. Model Training & Interpretability
 ```bash
 # Run 2-Stage XGBoost with Leave-One-Event-Out Cross-Validation (LOOCV)
 # Uses data/model_hyperparameters.json when present, defaults otherwise.
