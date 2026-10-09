@@ -5,9 +5,16 @@ import geopandas as gpd
 # Set the project base directory
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Input and Output directories
-INPUT_DIR = Path(os.getenv("TC_IMPACT_INPUT_DIR", BASE_DIR / "data" / "input"))
-OUTPUT_DIR = Path(os.getenv("TC_IMPACT_OUTPUT_DIR", BASE_DIR / "data" / "output"))
+# Root for everything the pipeline reads or writes. Defaults to `data/` inside
+# the repo, so a fresh clone works with no setup. Set TC_IMPACT_DATA_DIR to keep
+# the data off a small home partition and out of the working tree -- on mldevbox
+# that is /data/shared/fmoss/global-model.
+DATA_DIR = Path(os.getenv("TC_IMPACT_DATA_DIR", BASE_DIR / "data"))
+
+# Input and Output directories. Still individually overridable, for the case
+# where inputs come from a shared read-only location but outputs do not.
+INPUT_DIR = Path(os.getenv("TC_IMPACT_INPUT_DIR", DATA_DIR / "input"))
+OUTPUT_DIR = Path(os.getenv("TC_IMPACT_OUTPUT_DIR", DATA_DIR / "output"))
 
 
 # Data Source URLs
@@ -77,7 +84,7 @@ RASTER_CHUNK_SIZE = int(os.getenv("TC_IMPACT_RASTER_CHUNK", "10000"))
 # models/two_stage_xgb.py. If the file is absent the model falls back to the
 # defaults hardcoded in that class, so a fresh clone still runs.
 HYPERPARAMETERS_PATH = Path(
-    os.getenv("TC_IMPACT_HYPERPARAMETERS", BASE_DIR / "data" / "model_hyperparameters.json")
+    os.getenv("TC_IMPACT_HYPERPARAMETERS", DATA_DIR / "model_hyperparameters.json")
 )
 
 # FEATURES used in the final 2-stage XGBoost model
