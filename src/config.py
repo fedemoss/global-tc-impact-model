@@ -119,7 +119,10 @@ NON_CONTEMPLATED_FEATURES = [
 #     "BRB", "GRD", "MUS"
 # ]
 
-ISO3_LIST = ["ATG", "FJI", "HTI"]
+# None means global scope: resolve_iso3_list() below falls back to every
+# GID_0 in GADM. Set a list here to restrict the run to a few countries.
+# ISO3_LIST = ["ATG", "FJI", "HTI"]
+ISO3_LIST = None
 
 # --- Output paths for the time-dependent exposure layers -------------------
 # Kept here rather than in the processing modules so that dataset_builder can
