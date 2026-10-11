@@ -45,6 +45,16 @@ The pipeline relies on several low-level geospatial libraries for raster process
     * **Ubuntu/Debian:** `sudo apt-get install gdal-bin libgdal-dev`
     * **macOS (Homebrew):** `brew install gdal`
     * **Windows:** Use the [OSGeo4W installer](https://trac.osgeo.org/osgeo4w/) or install via Conda: `conda install -c conda-forge gdal`.
+    * **No root (shared servers/HPC):** `conda install -c conda-forge gdal` works everywhere, not just on Windows, and has the advantage that `libgdal` and the binaries are version-matched inside the environment.
+
+> ⚠️ **`gdaldem` must be on `PATH`, not merely installed.** The terrain step shells
+> out to the `gdaldem` binary (`subprocess.run(["gdaldem", ...])`), which is a
+> `PATH` lookup — unlike everything else here, which only needs importable Python
+> packages. Calling the environment's interpreter by absolute path
+> (`/path/to/env/bin/python main.py`) without activating the environment imports
+> fine and *then* fails on every country. `process_all_srtm()` now checks this up
+> front and raises, but activate the environment (`conda activate <env>`) or put
+> its `bin/` on `PATH` before running the pipeline. Verify with `which gdaldem`.
 
 
 ### 2. Python Environment
@@ -54,6 +64,13 @@ pip install -r requirements.txt
 ```
 
 **Note**: Install GDAL first, then the requirements.txt pip list
+
+On an unreliable connection, pass retries so a momentary CDN timeout is not
+reported as a missing package (pip renders a failed index fetch as
+`from versions: none`, which looks like a bad pin):
+```bash
+pip install --retries 15 --timeout 90 -r requirements.txt
+```
 
 ### 3. External Data Requirements
 * **EM-DAT (Ground Truth)**: The pipeline is anchored by verified disaster records. You must place your processed EM-DAT file at:  
