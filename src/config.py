@@ -96,12 +96,10 @@ FEATURES = [
 ]
 
 
-# Non-contemplated features (discussed in the paper but excluded from global
-# training). DOCUMENTATION ONLY -- nothing reads this list. Exclusion happens by
-# omission from FEATURES above, which is the only list the model, the SHAP
-# analysis and the hyperparameter search consume. It previously read
-# ["flood_risk", "shditrack_distance"] because of a missing comma, which changed
-# nothing for the same reason.
+# Features discussed in the paper but excluded from global training.
+# Documentation only: nothing reads this list. Exclusion is by omission from
+# FEATURES above, which is the only list the model, the SHAP analysis and the
+# hyperparameter search consume.
 NON_CONTEMPLATED_FEATURES = [
     "flood_risk",     # Excluded: Basins < 500km2 missing in 22/72 countries
     "shdi",           # Note: SHDI used where available, but missing in 19/72 countries
@@ -119,11 +117,10 @@ NON_CONTEMPLATED_FEATURES = [
 #     "BRB", "GRD", "MUS"
 # ]
 
-# Territories dropped even at global scope. Antarctica is 614,067 of the
-# 2,248,035 cells in the 0.1 degree land grid -- 27% of every raster pass -- and
-# no tropical cyclone has ever made landfall there, so it contributes nothing
-# but cost to a TC impact model. This filter applies to resolve_iso3_list() and
-# to the processors that read the grid directly.
+# Territories dropped even at global scope. Antarctica accounts for roughly a
+# quarter of the cells in the 0.1 degree land grid and is outside the range of
+# tropical cyclones, so it contributes cost but no signal. Applied by
+# resolve_iso3_list() and by the processors that read the grid directly.
 EXCLUDED_ISO3 = {"ATA"}
 
 # None means global scope: resolve_iso3_list() below falls back to every

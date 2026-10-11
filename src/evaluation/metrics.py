@@ -22,8 +22,7 @@ def compute_binary_metrics(df, target_col="perc_affected_pop_grid_region", pred_
     for t in thresholds:
         # The per-threshold maths lives in evaluation.bootstrap so that this
         # table and the bootstrapped one cannot drift apart. nan_on_undefined
-        # is False here, which reproduces sklearn's zero_division=0 and the
-        # numbers this function returned previously.
+        # is False here, matching sklearn's zero_division=0.
         metrics = compute_metrics_at_threshold(
             df, t, target_col=target_col, pred_col=pred_col, nan_on_undefined=False)
         results.append({'model': model_name, 'threshold': t, **metrics})

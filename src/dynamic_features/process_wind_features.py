@@ -180,12 +180,8 @@ def process_storm_tracks(tc_tracks):
     tracks = TCTracks()
 
     # CLIMADA's get_track() returns a list of Datasets for several tracks but a
-    # bare Dataset for exactly one. The previous `range(len(...))` + `[i]` form
-    # broke on that single-track case twice over: len(Dataset) counts data
-    # variables (9), so the loop ran nine times, and Dataset[0] raises KeyError,
-    # which the `except (IndexError, TypeError)` did not catch. Countries with
-    # one storm therefore died with "No variable named 0" -- 12 of them in the
-    # 2026-10-11 run. Normalising to a list once removes both problems.
+    # bare Dataset for exactly one. Normalise to a list: indexing or taking the
+    # length of a Dataset addresses its data variables, not its tracks.
     raw_tracks = tc_tracks.get_track()
     if not isinstance(raw_tracks, list):
         raw_tracks = [raw_tracks]
@@ -250,14 +246,11 @@ def process_single_country(iso3, out_dir, gdf_global, all_events_global, shp_glo
     # store_windfields=True causes a segfault on small centroid sets; intensity is
     # always stored regardless and is all we need for wind_speed output.
     #
-    # ignore_distance_to_coast=True skips CLIMADA's inland culling. That filter is
-    # a speed optimisation, not physics: it drops centroids more than
-    # max_dist_inland_km (default 1000 km) from the coast before computing the
-    # wind field, and nothing downstream reads dist_coast. Computing it requires
-    # a NASA raster whose URL now 301-redirects to an Earthdata landing page and
-    # serves HTML, so get_dist_coast() fails for every country. Cells that far
-    # inland take ~zero wind either way; we now compute the zero instead of
-    # assuming it.
+    # ignore_distance_to_coast=True disables CLIMADA's inland culling, which
+    # skips centroids beyond max_dist_inland_km (default 1000 km) from the
+    # coast. The filter is a speed optimisation and does not affect the wind
+    # field; such centroids take negligible wind. It also requires a NASA
+    # distance-to-coast raster whose published URL no longer serves the file.
     tc = TropCyclone.from_tracks(
         tracks,
         centroids=cent,

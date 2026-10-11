@@ -21,14 +21,12 @@ logger = logging.getLogger(__name__)
 
 
 def require_gdaldem():
-    """Fail loudly, once, if the gdaldem binary is not on PATH.
+    """Raise if the gdaldem binary is not on PATH.
 
-    Terrain features shell out to `gdaldem` (a PATH lookup), while the rest of
-    the module only needs importable Python packages. Running the pipeline with
-    the env's interpreter but without its bin/ on PATH therefore imports fine
-    and then fails per country, which previously logged the same
-    FileNotFoundError 260 times while the stage still reported success. Checking
-    up front turns that into one actionable error before any work is done.
+    Terrain features shell out to `gdaldem`, a PATH lookup, while the rest of
+    the module needs only importable packages. Calling the environment's
+    interpreter without its bin/ on PATH therefore imports successfully and
+    fails later, once per country. Checked once, before any work begins.
     """
     if shutil.which("gdaldem") is None:
         raise RuntimeError(
@@ -110,11 +108,9 @@ def derived_tile_path(raster_path, mode):
 def ensure_derived_tile(raster_path, mode):
     """Return the cached gdaldem product for a tile, building it if absent.
 
-    slope and TRI depend only on the tile, never on which country is being
-    processed, but tiles are shared between neighbouring countries. Computing
-    them inside the per-country loop therefore re-decompressed the DEM and
-    re-ran gdaldem once per (country, tile) pair. Caching makes it once per
-    tile, which is the number of times the work actually needs doing.
+    slope and TRI depend only on the tile, not on the country being processed,
+    and neighbouring countries share tiles. Caching keeps the cost at one
+    gdaldem run per tile and mode rather than one per (country, tile) pair.
 
     The write is atomic (temp file in the same directory, then os.replace) so
     that workers racing on a shared border tile cannot observe a partial file.
@@ -145,11 +141,10 @@ def run_terrain_task(grid_subset, raster_path):
     Calculates altitude, slope, and ruggedness for a single tile.
     Executes sequentially within a process to avoid CPU over-subscription.
 
-    `grid_subset` is expected to be free of antimeridian-crossing polygons
-    already (process_country filters once per country rather than once per
-    tile). Cells are clipped to the tile's own bounds before the zonal pass,
-    since a cell outside them cannot intersect the raster: without that, every
-    tile scanned the entire country grid, making the cost n_tiles x n_cells.
+    `grid_subset` must already exclude antimeridian-crossing polygons;
+    process_country filters once per country. Cells are clipped to the tile's
+    bounds before the zonal pass, since a cell outside them cannot intersect
+    the raster.
     """
     with rasterio.open(raster_path) as src:
         bounds = src.bounds

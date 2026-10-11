@@ -256,12 +256,9 @@ def calculate_grid_impact(iso3_filter=None):
     df_events = df_events[df_events["GID_0"].isin(iso3_list)].reset_index(drop=True)
     df_events["event_year"] = df_events["DisNo."].astype(str).str[:4].astype(int)
 
-    # Results are streamed to disk one event at a time rather than accumulated
-    # and concatenated at the end. Every event contributes a row per grid cell
-    # of its country, so the list used to reach ~17.4M rows globally (CHN alone
-    # is 81 events x 97,002 cells); with eight object-dtype columns among them
-    # that is tens of GB before pd.concat asks for a second copy, and the stage
-    # was being OOM-killed a couple of minutes into this function.
+    # Results are streamed to disk one event at a time. Each event contributes a
+    # row per grid cell of its country, so holding them all in memory for a
+    # single concatenation does not scale to global coverage.
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = out_path.with_suffix(".csv.partial")
     if tmp_path.exists():
@@ -308,10 +305,9 @@ def calculate_grid_impact(iso3_filter=None):
         merge_keys = ["GID_1"] if level == "ADM1" else ["GID_1", "GID_2"]
         event_drop = ["iso3"] + (["GID_2"] if level == "ADM1" else [])
         # At ADM1 level the event carries one row per ADM2 unit, all repeating
-        # the same ADM1-level figures. Once GID_2 is dropped those rows become
-        # exact duplicates, and merging them multiplied every grid cell by the
-        # number of ADM2 units in its province (~15x for Haiti). drop_duplicates
-        # removes only byte-identical rows, so nothing distinguishable is lost.
+        # the same ADM1 figures. Dropping GID_2 makes those rows identical, so
+        # they are collapsed before the merge to avoid duplicating grid cells.
+        # Only byte-identical rows are removed.
         df_event_keys = df_event.drop(columns=event_drop, errors="ignore").drop_duplicates()
         df_merged = df_grid.merge(
             df_event_keys,
@@ -342,12 +338,9 @@ def calculate_grid_impact(iso3_filter=None):
         ) / total_pop_reg
 
         # 5. Finalize and append
-        # One percentage per cell. df_affected can hold the same id several
-        # times (it inherits df_merged's shape), and joining it undeduplicated
-        # multiplied the row count again -- Haiti came out at 1,137,998 rows for
-        # 25 events over 333 cells, against 8,325 real (event, cell) pairs. The
-        # repeats are byte-identical: across every Haitian event, the number of
-        # ids carrying more than one distinct percentage is zero.
+        # One percentage per cell. df_affected inherits df_merged's shape and so
+        # may repeat an id; the percentage is constant within an id, so it is
+        # deduplicated before the join to keep one row per (event, cell).
         df_final = df_merged.merge(
             df_affected[["id", "perc_affected_pop_grid_region"]].drop_duplicates(subset=["id"]),
             on="id",
