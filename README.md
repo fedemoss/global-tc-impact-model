@@ -16,10 +16,10 @@ The core of this project is the **Data Factory**, which automates the collection
 │   ├── collectors/           # Data acquisition (general_collector.py, pps_collector.py)
 │   ├── static_features/      # Spatial Processing (grid_cells.py, process_gadm.py, etc.)
 │   ├── dynamic_features/     # Event-Based Processing (process_emdat.py, process_wind.py, etc.)
-│   ├── evaluation/           # Metrics & event-level bootstrap CIs (bootstrap.py)
 │   ├── models/               # Two-Stage XGBoost & Baselines (train.py)
-│   ├── evaluation/           # LOOCV Pipeline & Metrics
+│   ├── evaluation/           # LOOCV (cv_strategies.py), metrics & bootstrap CIs (bootstrap.py)
 │   ├── interpretability/     # SHAP Analysis & Visualization
+│   ├── utils/                # Shared helpers (geo_utils, logging_setup, time interpolation)
 │   ├── config.py             # Global constants, URLs, and ISO3 List
 │   └── dataset_builder.py    # Master script to compile the final Parquet
 ├── test/                     # Hyperparameter search (hyperparameter_search.py)
@@ -132,6 +132,7 @@ Downloads all public data, initializes the 0.1° grid, processes all 16 features
 ```bash
 python main.py
 ```
+The scope is **global by default** (`ISO3_LIST = None` in `src/config.py`; Antarctica excluded); set `ISO3_LIST` to a short country list there to test the plumbing cheaply. Data lives under `./data/` unless overridden with `TC_IMPACT_DATA_DIR` (or `TC_IMPACT_INPUT_DIR` / `TC_IMPACT_OUTPUT_DIR` individually) — useful when the raw downloads should sit on a large scratch disk.
 
 ### 2. Partial Execution (By Stage)
 Use the `--stage` flag to execute or re-run specific parts of the pipeline:
@@ -150,7 +151,7 @@ python main.py --stage static
 #    default 48-per-day half-hourly ones (same feature, ~50x less download).
 python main.py --stage dynamic
 
-# 5. Assembly the final training_dataset.parquet
+# 5. Assemble the final training_dataset.parquet
 python main.py --stage build
 ```
 
@@ -176,7 +177,7 @@ Three properties are worth knowing, because they decide whether the reported num
 
 The winner is written to `data/model_hyperparameters.json` and **loaded automatically** by `TwoStageXGBoost` — no copying numbers by hand. If the file is absent the model falls back to its built-in defaults, so a fresh clone still runs; explicit constructor arguments always win over the file. Override the location with `TC_IMPACT_HYPERPARAMETERS`.
 
-> The development subset in `ISO3_LIST` (ATG/FJI/HTI) is far too small for a search — every event fails the selection filters. Point `--input` at the full dataset.
+> If you restricted `ISO3_LIST` to a small development subset while testing, point `--input` at a full dataset for the search — a handful of countries leaves too few events, and every one fails the selection filters.
 
 ### 4. Validation Metrics with Confidence Intervals
 ```bash
@@ -187,19 +188,21 @@ python -m src.evaluation.metrics
 python -m src.evaluation.metrics --bootstrap --n-boot 1000
 ```
 
-`src/evaluation/bootstrap.py` attaches nonparametric 95% CIs to every validation metric by resampling **whole cyclones**, not ADM1 rows. That distinction is what makes the intervals meaningful: ADM1 rows from one storm share a hazard field and a single EM-DAT report, so they are not independent observations — resampling rows treats correlated data as independent and yields intervals that are far too narrow. On representative data the event-level interval comes out roughly **1.8× wider** than a row-level one, and the wider number is the honest one.
+`src/evaluation/bootstrap.py` attaches nonparametric 95% CIs to every validation metric by resampling **whole cyclones** (`--event-col` defaults to `sid`; pass `--event-col "DisNo."` only to reproduce the round-1 country-event unit), not ADM1 rows. That distinction is what makes the intervals meaningful: ADM1 rows from one storm share a hazard field and a single EM-DAT report, so they are not independent observations — resampling rows treats correlated data as independent and yields intervals that are far too narrow. On representative data the event-level interval comes out roughly **1.8× wider** than a row-level one, and the wider number is the honest one.
 
 Undefined metrics are treated differently in the point estimate and in the replicates, on purpose: the point estimate scores an undefined ratio as 0.0 (matching `sklearn`'s `zero_division=0`, so headline numbers stay conventional), while a replicate where the metric is undefined is excluded from the percentile and counted in `<metric>_n_undefined_boot`. Check that column before quoting an interval — one built on few valid replicates says little. Intervals are percentile-method, so not bias- or skew-corrected (no BCa).
 
 ### 5. Model Training & Interpretability
 ```bash
-# Run 2-Stage XGBoost with Leave-One-Event-Out Cross-Validation (LOOCV)
+# Run 2-Stage XGBoost with Leave-One-Cyclone-Out Cross-Validation (LOOCV)
 # Uses data/model_hyperparameters.json when present, defaults otherwise.
 python main.py --run-models
 
 # Generate SHAP Summary and Dependence Plots for the trained model
 python main.py --run-interpretability
 ```
+
+The LOOCV unit is the **physical cyclone (IBTrACS `sid`)**: a storm that hits several countries leaves the training set as a whole. The round-1 grouping by EM-DAT country-event record remains available for comparison — call `execute_training_run(..., event_col="DisNo.")`; its outputs land in a separate `..._by_DisNo.` directory so the two never mix.
 
 ---
 
@@ -210,8 +213,8 @@ The pipeline engineers the following features for every 0.1° grid cell:
 | Category | Features | Data Source |
 | :--- | :--- | :--- |
 | **Physical Hazard** | Max Wind Speed, 24h Max Rainfall, Storm Surge, Flood Risk | IBTrACS, NASA PPS, COAST-RP, GLOFAS |
-| **Exposure** | Total Population (Grid-level) | WorldPop (2020 UN-Adjusted) |
-| **Vulnerability** | Urban/Rural/Water Proportions, SHDI (Subnational HDI) | JRC (GHSL), Global Data Lab |
+| **Exposure** | Total Population (Grid-level), interpolated to the event year | WorldPop anchors 2000–2020 (post-2020 extrapolated) |
+| **Vulnerability** | Urban/Rural/Water Proportions (interpolated to the event year), SHDI (Subnational HDI) | GHSL SMOD epochs 2000–P2025, Global Data Lab |
 | **Terrain** | Elevation, Slope, Ruggedness | SRTM (CGIAR-CSI) |
 | **Geography** | Distance to Coast, Coastline Length, Landslide Risk | GADM, World Bank |
 | **History** | N Events in Last 5 Years | IBTrACS / EM-DAT |
