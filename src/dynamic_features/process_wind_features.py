@@ -178,12 +178,22 @@ def get_storm_tracks(all_events):
 
 def process_storm_tracks(tc_tracks):
     tracks = TCTracks()
-    for i in range(len(tc_tracks.get_track())):
-        try:
-            track_xarray = tc_tracks.get_track()[i]
-        except (IndexError, TypeError):
-            track_xarray = tc_tracks.get_track()
-            
+
+    # CLIMADA's get_track() returns a list of Datasets for several tracks but a
+    # bare Dataset for exactly one. The previous `range(len(...))` + `[i]` form
+    # broke on that single-track case twice over: len(Dataset) counts data
+    # variables (9), so the loop ran nine times, and Dataset[0] raises KeyError,
+    # which the `except (IndexError, TypeError)` did not catch. Countries with
+    # one storm therefore died with "No variable named 0" -- 12 of them in the
+    # 2026-10-11 run. Normalising to a list once removes both problems.
+    raw_tracks = tc_tracks.get_track()
+    if not isinstance(raw_tracks, list):
+        raw_tracks = [raw_tracks]
+    if not raw_tracks:
+        logger.warning("No usable storm tracks; returning empty TCTracks.")
+        return tracks
+
+    for track_xarray in raw_tracks:
         w = np.array(track_xarray.max_sustained_wind)
         t = np.array(track_xarray.time)
         t_step = np.array(track_xarray.time_step)
