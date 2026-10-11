@@ -6,7 +6,14 @@ The core of this project is the **Data Factory**, which automates the collection
 
 ---
 
-## 📂 Repository Structure
+## Citation
+
+If you use this repository or the generated dataset in your research, please cite:
+> *Moss, F et al. Global Sub-national Impact-based Forecasting for Tropical Cyclones Using Open Data: Combining Machine Learning and Exposure-based Approaches, EGUsphere (2026). doi: 10.5194/egusphere-2026-1996 (under review).*
+
+---
+
+## Repository Structure
 
 ```text
 ├── data/
@@ -30,7 +37,7 @@ The core of this project is the **Data Factory**, which automates the collection
 
 ---
 
-## 🛠 Prerequisites & Data Preparation
+## Prerequisites & Data Preparation
 
 ### 1. System Dependencies
 The pipeline relies on several low-level geospatial libraries for raster processing and atmospheric data handling:
@@ -47,7 +54,7 @@ The pipeline relies on several low-level geospatial libraries for raster process
     * **Windows:** Use the [OSGeo4W installer](https://trac.osgeo.org/osgeo4w/) or install via Conda: `conda install -c conda-forge gdal`.
     * **No root (shared servers/HPC):** `conda install -c conda-forge gdal` works everywhere, not just on Windows, and has the advantage that `libgdal` and the binaries are version-matched inside the environment.
 
-> ⚠️ **`gdaldem` must be on `PATH`, not merely installed.** The terrain step shells
+> **`gdaldem` must be on `PATH`, not merely installed.** The terrain step shells
 > out to the `gdaldem` binary (`subprocess.run(["gdaldem", ...])`), which is a
 > `PATH` lookup — unlike everything else here, which only needs importable Python
 > packages. Calling the environment's interpreter by absolute path
@@ -117,13 +124,13 @@ pip install --retries 15 --timeout 90 -r requirements.txt
 
     The two agree to **correlation 0.9994** (median relative difference 0.17%, verified over 576k pixels); above 75 mm/day they are effectively identical (±0.6%), while below ~25 mm the daily route's 2.4 mm quantisation shows (±6%). Use `half_hourly` when light-rain precision matters and `daily` when download volume does — the whole 2000–2022 record is ~2.8 GB as daily granules against ~90 GB as half-hourly ones.
 
-    > ⚠️ **The two products are not interchangeable without their conversion.** The daily granule stores a *rate*, so using it as if it were an accumulation under-counts rainfall by a factor of 24. Each product therefore has its own conversion function in `process_rain_features.py` (`half_hour_raw_to_mm`, `daily_raw_to_mm`) and they are never mixed. Both report short days rather than silently summing a partial one, since the feature is a maximum over days and an incomplete day can only bias it downward.
+    > **The two products are not interchangeable without their conversion.** The daily granule stores a *rate*, so using it as if it were an accumulation under-counts rainfall by a factor of 24. Each product therefore has its own conversion function in `process_rain_features.py` (`half_hour_raw_to_mm`, `daily_raw_to_mm`) and they are never mixed. Both report short days rather than silently summing a partial one, since the feature is a maximum over days and an incomplete day can only bias it downward.
 
 * **SHDI Index (Vulnerability)**: Download this dataset manually from *https://globaldatalab.org/shdi/download/shdi/* and put it in under `/data/SHDI/GDL-Subnational-HDI-data.csv` (requires logging to GlobalDataLab)
 
 ---
 
-## 🚀 Execution Workflow
+## Execution Workflow
 
 The `main.py` script manages the end-to-end workflow. By default, it operates as a Data Factory.
 
@@ -206,7 +213,7 @@ The LOOCV unit is the **physical cyclone (IBTrACS `sid`)**: a storm that hits se
 
 ---
 
-## 📊 Feature Dictionary
+## Feature Dictionary
 
 The pipeline engineers the following features for every 0.1° grid cell:
 
@@ -221,7 +228,7 @@ The pipeline engineers the following features for every 0.1° grid cell:
 
 ---
 
-## 📝 Methodology Summary
+## Methodology Summary
 
 ### 1. Spatial Impact Expansion
 To accurately model sub-national variation, `process_emdat.py` parses reported administrative units from EM-DAT and expands them into a full country-event grid. Regions explicitly reported by EM-DAT receive the `Total Affected` value, while all other regions in the country are zero-filled. This creates a contrast baseline that allows the model to learn the specific spatial drivers of impact.
@@ -234,9 +241,3 @@ Because spatial impact data is heavily zero-inflated (many cells have no impact)
 ### 3. Model Interpretability
 Interpretability is provided via **SHAP (SHapley Additive exPlanations)**. This allows the model to move beyond "black box" predictions, quantifying how individual hazards (e.g., wind speed) interact with local vulnerability (e.g., SHDI) to drive the final affected population counts.
 
----
-
-## 🎓 Citation
-
-If you use this repository or the generated dataset in your research, please cite:
-> *Moss, F et al. Global Sub-national Impact-based Forecasting for Tropical Cyclones Using Open Data: Combining Machine Learning and Exposure-based Approaches, EGUsphere (2026). doi: 10.5194/egusphere-2026-1996 (under review).*
