@@ -14,7 +14,7 @@ import rasterio
 from rasterstats import zonal_stats
 from sklearn.neighbors import NearestNeighbors
 
-from src.config import INPUT_DIR, OUTPUT_DIR
+from src.config import EXCLUDED_ISO3, INPUT_DIR, OUTPUT_DIR
 from src.utils.geo_utils import adjust_longitude, is_antimeridian_crossing
 
 logger = logging.getLogger(__name__)
@@ -325,8 +325,10 @@ def process_all_srtm():
     tiles_df = get_country_tiles(grid)
     
     # Iterate countries sequentially to prevent process explosion
-    # Multi-processing is handled at the tile level within each country
-    ISO3_LIST = grid.iso3.unique()
+    # Multi-processing is handled at the tile level within each country.
+    # This reads the grid rather than resolve_iso3_list() (GADM is already
+    # open and re-reading it is expensive), so EXCLUDED_ISO3 is applied here.
+    ISO3_LIST = [iso for iso in grid.iso3.unique() if iso not in EXCLUDED_ISO3]
     for iso in ISO3_LIST:
         try:
             # Pass tiles_df as an argument to the modified process_country function

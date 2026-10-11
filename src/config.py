@@ -119,6 +119,13 @@ NON_CONTEMPLATED_FEATURES = [
 #     "BRB", "GRD", "MUS"
 # ]
 
+# Territories dropped even at global scope. Antarctica is 614,067 of the
+# 2,248,035 cells in the 0.1 degree land grid -- 27% of every raster pass -- and
+# no tropical cyclone has ever made landfall there, so it contributes nothing
+# but cost to a TC impact model. This filter applies to resolve_iso3_list() and
+# to the processors that read the grid directly.
+EXCLUDED_ISO3 = {"ATA"}
+
 # None means global scope: resolve_iso3_list() below falls back to every
 # GID_0 in GADM. Set a list here to restrict the run to a few countries.
 # ISO3_LIST = ["ATG", "FJI", "HTI"]
@@ -139,9 +146,14 @@ def urbanization_grid_path(iso3, epoch):
 
 
 def resolve_iso3_list():
-    """Return ISO3_LIST if set, otherwise all GID_0 codes from GADM."""
+    """Return ISO3_LIST if set, otherwise all GID_0 codes from GADM.
+
+    EXCLUDED_ISO3 is applied in both cases, so an explicit list cannot
+    accidentally reintroduce a territory the model never wants.
+    """
     if ISO3_LIST is not None:
-        return ISO3_LIST
+        return [iso for iso in ISO3_LIST if iso not in EXCLUDED_ISO3]
     gadm_path = INPUT_DIR / "SHP" / "gadm_410.gdb"
     world = gpd.read_file(gadm_path, ignore_geometry=True)
-    return sorted(world["GID_0"].dropna().unique().tolist())
+    codes = world["GID_0"].dropna().unique().tolist()
+    return sorted(c for c in codes if c not in EXCLUDED_ISO3)

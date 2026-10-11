@@ -1,7 +1,7 @@
 import pandas as pd
 import geopandas as gpd
 import numpy as np
-from src.config import INPUT_DIR, OUTPUT_DIR
+from src.config import EXCLUDED_ISO3, INPUT_DIR, OUTPUT_DIR
 
 def process_shdi_to_grid(iso, grid_enriched, shdi_df, out_dir):
     """
@@ -67,7 +67,7 @@ def process_all_shdi():
     out_dir = OUTPUT_DIR / "SHDI" / "grid_data"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    iso_list = grid_global.iso3.unique()
+    iso_list = [iso for iso in grid_global.iso3.unique() if iso not in EXCLUDED_ISO3]
     
     for iso in iso_list:
         # 1. Filter global datasets to the specific country
