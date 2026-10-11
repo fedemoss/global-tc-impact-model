@@ -50,12 +50,8 @@ def list_files(url, session, suffix=".zip", timeout=120):
     The granule filenames carry a varying numeric field, so they are read from
     the listing rather than constructed.
 
-    The timeout is not optional in practice: the granule downloads below already
-    pass one, but this listing call did not, and a PPS connection that stops
-    responding mid-listing then blocks forever with no error and no log line.
-    That is exactly how the 2026-10-11 run died -- the process sat in
-    futex_wait_queue_me for over four hours, holding open sockets, having
-    written its last granule at 19:28.
+    A timeout is required: an unresponsive PPS connection would otherwise block
+    the calling thread indefinitely, with no error raised and no output logged.
     """
     try:
         response = session.get(url, auth=(USERNAME, PASSWORD), timeout=timeout)
@@ -206,11 +202,8 @@ def download_gpm_daily_run(start_date, end_date, typhoon_name=None, max_workers=
     daily_gpm_dir().mkdir(parents=True, exist_ok=True)
     date_list = pd.date_range(start_date, end_date)
 
-    # One Session per worker thread, not one shared across them. requests'
-    # Session is not thread-safe: its connection pool can be mutated from
-    # several threads at once, which risks exactly the kind of silent lock-up
-    # seen on 2026-10-11. thread-local storage gives each thread its own while
-    # still reusing connections within that thread.
+    # requests.Session is not thread-safe, so each worker gets its own via
+    # thread-local storage; connections are still reused within a thread.
     local = threading.local()
 
     def _session():

@@ -59,11 +59,9 @@ def select_tiles_by_country(tif_paths, grid_country, buffer_deg=0.5):
 def process_single_country_flood(iso, grid_country, tile_paths, out_dir):
     """Calculates max flood risk per grid cell across all relevant tiles.
 
-    `grid_country` is this country's cells only. It used to receive the whole
-    global grid and filter inside, which meant every worker held all 2.2M cells
-    and -- worse -- the zonal pass below ran over the full country grid once per
-    tile. Cells are now clipped to each tile's bounds first, since a cell
-    outside them cannot contribute to that tile's maximum anyway.
+    `grid_country` holds this country's cells only, so workers never carry the
+    global grid. Cells are clipped to each tile's bounds before the zonal pass:
+    a cell outside them cannot contribute to that tile's maximum.
     """
     out_path = out_dir / f"flood_risk_{iso}.csv"
     if out_path.exists():
@@ -129,10 +127,9 @@ def process_all_flood():
     valid_iso3 = [iso for iso in grid.iso3.unique() if iso not in EXCLUDED_ISO3]
     logger.info(f"Processing flood risk for {len(valid_iso3)} countries...")
 
-    # Processes, not threads: zonal_stats spends its time in Python-level
-    # per-cell work that holds the GIL, so the previous ThreadPoolExecutor ran
-    # four workers at roughly one core's throughput. Each task is handed only
-    # its own country's cells, so the global grid is never pickled.
+    # Processes, not threads: zonal_stats does its per-cell work in Python and
+    # holds the GIL, so threads would serialise. Each task receives only its own
+    # country's cells, keeping the global grid out of the pickled payload.
     with ProcessPoolExecutor(max_workers=RASTER_WORKERS) as executor:
         futures = {
             executor.submit(

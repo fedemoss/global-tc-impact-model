@@ -6,19 +6,14 @@ Population is time dependent in this pipeline: every anchor year is aggregated
 here, and dataset_builder interpolates between them to the year of each event
 (see utils/time_interpolation.py).
 
-Two defects of the single-year version are fixed.
+Two implementation notes.
 
-* The raster handle used to be opened once and shared across worker threads.
-  GDAL datasets are not thread-safe, which produces spurious "Corrupted LZW
-  table" / "TIFFReadEncodedTile() failed" errors and silently drops whole
-  countries. Each worker now opens its own handle, and the work is split across
-  processes rather than threads - the per-cell masking is Python-level and holds
-  the GIL, so a thread pool ran slower than a single thread.
-* Population was summed as `out_image[out_image > 0]`. That works for the
-  2005-2020 rasters, whose nodata is -3.4e38 and so drops out of a "> 0" filter
-  by itself, but ppp_2000 encodes nodata as *positive* +3.4e38: a single such
-  pixel would have swamped the entire population of a cell. Nodata is now
-  excluded explicitly, which is correct whichever sign a year happens to use.
+* Each worker opens its own raster handle, and the work is split across
+  processes rather than threads. GDAL datasets are not thread-safe, and the
+  per-cell masking is Python-level and holds the GIL.
+* Nodata is excluded explicitly rather than by a "> 0" filter. Nodata is
+  -3.4e38 in the 2005-2020 rasters but +3.4e38 in ppp_2000, so a sign-dependent
+  filter would admit nodata pixels for that year.
 """
 import logging
 import os
