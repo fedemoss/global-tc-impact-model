@@ -84,7 +84,8 @@ def prepare_data(aggregate_to_adm1=False):
     return df.drop_duplicates()
 
 
-def execute_training_run(model_name, strategy, aggregate_to_adm1=False, event_col="sid"):
+def execute_training_run(model_name, strategy, aggregate_to_adm1=False, event_col="sid",
+                         use_tuned=True):
     """Orchestrates the data prep and LOOCV execution for a specific model and strategy.
 
     `event_col` is the LOOCV grouping unit: "sid" (the physical cyclone --
@@ -92,6 +93,11 @@ def execute_training_run(model_name, strategy, aggregate_to_adm1=False, event_co
     bootstrap) or "DisNo." (the round-1 country-event record, kept as an
     explicit option so the old grouping can be reproduced for the response
     letter's before/after comparison).
+
+    `use_tuned=False` ignores data/model_hyperparameters.json and runs the
+    built-in (round-1) fixed configuration -- the attribution runs in
+    RERUN_CHECKLIST.md use it to separate "re-tuned model" from "corrected
+    evaluation" when explaining why headline metrics moved.
     """
     logger.info("--- Starting Run ---")
     logger.info(f"Model: {model_name}")
@@ -129,7 +135,7 @@ def execute_training_run(model_name, strategy, aggregate_to_adm1=False, event_co
     elif model_name == "windspeed-historical":
         model = WindspeedHistoricalModel()
     elif model_name == "2-stage-XGBoost":
-        model = TwoStageXGBoost(features=FEATURES)
+        model = TwoStageXGBoost(features=FEATURES, use_tuned=use_tuned)
     else:
         raise ValueError(
             f"Unknown model_name: {model_name}. Allowed: 'historical', "
