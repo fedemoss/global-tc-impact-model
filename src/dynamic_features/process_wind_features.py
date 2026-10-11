@@ -239,7 +239,21 @@ def process_single_country(iso3, out_dir, gdf_global, all_events_global, shp_glo
 
     # store_windfields=True causes a segfault on small centroid sets; intensity is
     # always stored regardless and is all we need for wind_speed output.
-    tc = TropCyclone.from_tracks(tracks, centroids=cent, intensity_thres=0)
+    #
+    # ignore_distance_to_coast=True skips CLIMADA's inland culling. That filter is
+    # a speed optimisation, not physics: it drops centroids more than
+    # max_dist_inland_km (default 1000 km) from the coast before computing the
+    # wind field, and nothing downstream reads dist_coast. Computing it requires
+    # a NASA raster whose URL now 301-redirects to an Earthdata landing page and
+    # serves HTML, so get_dist_coast() fails for every country. Cells that far
+    # inland take ~zero wind either way; we now compute the zero instead of
+    # assuming it.
+    tc = TropCyclone.from_tracks(
+        tracks,
+        centroids=cent,
+        intensity_thres=0,
+        ignore_distance_to_coast=True,
+    )
 
     # CLIMADA deduplicates identical lat/lon centroids internally, so tc.intensity
     # may have fewer columns than len(gdf). Build a mapping from each grid cell to
