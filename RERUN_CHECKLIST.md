@@ -1,17 +1,9 @@
-# Rerun checklist — before the numbers freeze
+# Rerun checklist 
 
-Everything that must be confirmed, run, or decided before the rerun results go
-into the manuscript and the response letter. Ordered: provenance first, then
-the runs, then the reporting. Check items off in this file as they close.
-
-The rerun's direction (precision down, recall up) is expected — the old
-numbers were partly an evaluation artifact (same storm in train and test
-through sibling-country records). The items below are what turns "the numbers
-moved" into a defensible story.
 
 ---
 
-## 1. Provenance of the rerun (confirm, 10 min)
+## 1. Provenance of the rerun (confirm)
 
 - [ ] **Folds = physical cyclones.** The LOOCV log prints
       `N physical cyclones / M country-event records / rows -> K folds`;
@@ -34,9 +26,9 @@ moved" into a defensible story.
       State it; the with/without pair is the ablation (Appendix E), and the
       primary-specification decision is still open with KK.
 
-## 2. Attribution runs (the question the group and the reviewers will ask)
+## 2. Attribution runs 
 
-"How much of 0.42 → 0.34 is leakage removed vs model re-tuned vs data
+"How much of 0.42 ->  0.34 is leakage removed vs model re-tuned vs data
 corrected?" One extra run splits the two biggest factors — the old fixed
 configuration under the new grouping and data:
 
@@ -48,11 +40,11 @@ execute_training_run("2-stage-XGBoost", "global", aggregate_to_adm1=True,
 ```
 
 - [ ] Run it; report the three-row attribution table:
-      old data/grouping/config → new data+grouping with old config → fully new.
+      old data/grouping/config -> new data+grouping with old config -> fully new.
 - [ ] One sentence per step in the response letter (R3 C13 promised the
       before/after of the regrouping).
 
-## 3. Label-flip accounting (618 → 647 high pairs)
+## 3. Label-flip accounting (618 -> 647 high pairs)
 
 The year-matched population denominators move pairs across the 15% line
 (+29 net). Reviewers must see this is the denominator fix, not a bug.
@@ -74,7 +66,7 @@ The year-matched population denominators move pairs across the 15% line
       before/after delta quoted in the letter. At the 15% threshold several
       gaps may not be significant.
 
-## 5. The baseline inversion — report it, don't bury it
+## 5. The baseline inversion 
 
 From the common-set matrices: at the **15% threshold** windspeed-exposed now
 has precision ≈ 0.23 / F1 ≈ 0.30 against the model's 0.08 / 0.15, while the
@@ -100,7 +92,7 @@ model clearly wins **detection** (F1 ≈ 0.34 vs 0.25).
 `coast_length_meters` is currently computed in EPSG:25394 (Luzon 1911 /
 Philippines zone V). The note in `process_srtm.py` calling EPSG:6933 a "local
 UTM zone" is wrong — 6933 is World Cylindrical Equal Area — but using it for
-*lengths* was also wrong (equal-area ≠ equidistant). Neither CRS is the right
+*lengths* was also wrong (equal-area =/= equidistant). Neither CRS is the right
 tool; the clean fix needs no CRS at all:
 
 ```python
@@ -109,11 +101,11 @@ GEOD = Geod(ellps="WGS84")
 grid_line["coast_length_meters"] = grid_line.geometry.apply(GEOD.geometry_length)
 ```
 
-- [ ] Decide with KK: adopt geodesic length (changes a model feature → must
+- [ ] Decide with KK: adopt geodesic length (changes a model feature -> must
       land before, not after, the frozen rerun) or document the 25394 choice
       honestly as a legacy approximation.
 
-## 8. Still open from the September audit
+## 8. Still open
 
 - [ ] **Selection-filter unification**: `src/models/train.py` exempts
       single-ADM1 countries from the all-units-affected filter;
@@ -122,7 +114,7 @@ grid_line["coast_length_meters"] = grid_line.geometry.apply(GEOD.geometry_length
       produced the paper's 780 records and make both match it.
 - [ ] **Requirements split**: a minimal `requirements-model.txt`
       (numpy, pandas, scikit-learn, xgboost, joblib, pyarrow, geopandas) for
-      the model/search path; keep the full freeze for the data factory.
+      the model/search path
 - [ ] **Threshold sweep** (Appendix B, pair-level counts) and the **TIGGE**
       bookkeeping scripts, regenerated from the rerun predictions.
 - [ ] When all boxes close: tag `v1.0-nhess-r2`, mint the Zenodo DOI, paste
