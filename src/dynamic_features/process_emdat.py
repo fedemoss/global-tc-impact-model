@@ -255,7 +255,19 @@ def calculate_grid_impact(iso3_filter=None):
     iso3_list = [iso3_filter] if iso3_filter else resolve_iso3_list()
     df_events = df_events[df_events["GID_0"].isin(iso3_list)].reset_index(drop=True)
     df_events["event_year"] = df_events["DisNo."].astype(str).str[:4].astype(int)
-    impact_data_grid = []
+
+    # Results are streamed to disk one event at a time rather than accumulated
+    # and concatenated at the end. Every event contributes a row per grid cell
+    # of its country, so the list used to reach ~17.4M rows globally (CHN alone
+    # is 81 events x 97,002 cells); with eight object-dtype columns among them
+    # that is tens of GB before pd.concat asks for a second copy, and the stage
+    # was being OOM-killed a couple of minutes into this function.
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = out_path.with_suffix(".csv.partial")
+    if tmp_path.exists():
+        tmp_path.unlink()
+    stream_columns = None
+    rows_written = 0
 
     # Interpolating the population anchors is done once per country, not once
     # per event, since many events share a country and often a year
@@ -330,12 +342,26 @@ def calculate_grid_impact(iso3_filter=None):
             how="left"
         ).fillna({"perc_affected_pop_grid_region": 0})
 
-        impact_data_grid.append(df_final)
+        if stream_columns is None:
+            stream_columns = list(df_final.columns)
+            df_final.to_csv(tmp_path, index=False, mode="w")
+        else:
+            if list(df_final.columns) != stream_columns:
+                extra = set(df_final.columns) - set(stream_columns)
+                if extra:
+                    logging.warning(
+                        f"{event_id}: unexpected columns {sorted(extra)} dropped; "
+                        "the streamed file keeps the column set of the first event"
+                    )
+                df_final = df_final.reindex(columns=stream_columns)
+            df_final.to_csv(tmp_path, index=False, mode="a", header=False)
+        rows_written += len(df_final)
 
-        del df_pop, df_admin, df_grid, df_merged, df_affected
+        del df_pop, df_admin, df_grid, df_merged, df_affected, df_final
 
-    if impact_data_grid:
-        pd.concat(impact_data_grid, ignore_index=True).to_csv(out_path, index=False)
+    if stream_columns is not None:
+        tmp_path.replace(out_path)
+        logging.info(f"Grid impact written: {rows_written:,} rows -> {out_path}")
 
 def process_emdat_events(iso3_filter=None):
     preprocess_emdat_events(iso3_filter=iso3_filter)
