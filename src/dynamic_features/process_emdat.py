@@ -307,8 +307,14 @@ def calculate_grid_impact(iso3_filter=None):
         # from the admin map; keeping both causes GID_2_x/GID_2_y suffix collision.
         merge_keys = ["GID_1"] if level == "ADM1" else ["GID_1", "GID_2"]
         event_drop = ["iso3"] + (["GID_2"] if level == "ADM1" else [])
+        # At ADM1 level the event carries one row per ADM2 unit, all repeating
+        # the same ADM1-level figures. Once GID_2 is dropped those rows become
+        # exact duplicates, and merging them multiplied every grid cell by the
+        # number of ADM2 units in its province (~15x for Haiti). drop_duplicates
+        # removes only byte-identical rows, so nothing distinguishable is lost.
+        df_event_keys = df_event.drop(columns=event_drop, errors="ignore").drop_duplicates()
         df_merged = df_grid.merge(
-            df_event.drop(columns=event_drop, errors="ignore"),
+            df_event_keys,
             on=merge_keys,
             how="left"
         )
@@ -336,8 +342,14 @@ def calculate_grid_impact(iso3_filter=None):
         ) / total_pop_reg
 
         # 5. Finalize and append
+        # One percentage per cell. df_affected can hold the same id several
+        # times (it inherits df_merged's shape), and joining it undeduplicated
+        # multiplied the row count again -- Haiti came out at 1,137,998 rows for
+        # 25 events over 333 cells, against 8,325 real (event, cell) pairs. The
+        # repeats are byte-identical: across every Haitian event, the number of
+        # ids carrying more than one distinct percentage is zero.
         df_final = df_merged.merge(
-            df_affected[["id", "perc_affected_pop_grid_region"]],
+            df_affected[["id", "perc_affected_pop_grid_region"]].drop_duplicates(subset=["id"]),
             on="id",
             how="left"
         ).fillna({"perc_affected_pop_grid_region": 0})
