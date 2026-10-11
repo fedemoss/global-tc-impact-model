@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import tempfile
 from multiprocessing import Pool, cpu_count
+from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
@@ -100,44 +101,81 @@ def get_country_tiles(grid):
 # Terrain Analysis
 # -------------------------------------------------------------------
 
+def derived_tile_path(raster_path, mode):
+    """Cache location for a gdaldem product of one SRTM tile."""
+    out_dir = INPUT_DIR / "SRTM" / "derived"
+    return out_dir / f"{Path(raster_path).stem}_{mode.lower()}.tif"
+
+
+def ensure_derived_tile(raster_path, mode):
+    """Return the cached gdaldem product for a tile, building it if absent.
+
+    slope and TRI depend only on the tile, never on which country is being
+    processed, but tiles are shared between neighbouring countries. Computing
+    them inside the per-country loop therefore re-decompressed the DEM and
+    re-ran gdaldem once per (country, tile) pair. Caching makes it once per
+    tile, which is the number of times the work actually needs doing.
+
+    The write is atomic (temp file in the same directory, then os.replace) so
+    that workers racing on a shared border tile cannot observe a partial file.
+    """
+    out_path = derived_tile_path(raster_path, mode)
+    if out_path.exists():
+        return out_path
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(suffix=".tif", dir=str(out_path.parent))
+    os.close(fd)
+    try:
+        subprocess.run(
+            ["gdaldem", mode, "-co", "COMPRESS=DEFLATE", str(raster_path), tmp,
+             "-compute_edges"],
+            check=True, capture_output=True,
+        )
+        os.replace(tmp, out_path)
+    except Exception:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+    return out_path
+
+
 def run_terrain_task(grid_subset, raster_path):
     """
     Calculates altitude, slope, and ruggedness for a single tile.
     Executes sequentially within a process to avoid CPU over-subscription.
+
+    `grid_subset` is expected to be free of antimeridian-crossing polygons
+    already (process_country filters once per country rather than once per
+    tile). Cells are clipped to the tile's own bounds before the zonal pass,
+    since a cell outside them cannot intersect the raster: without that, every
+    tile scanned the entire country grid, making the cost n_tiles x n_cells.
     """
-    # Remove antimeridian-crossing polygons for this specific raster calculation
-    grid_clean = grid_subset[~grid_subset["geometry"].apply(is_antimeridian_crossing)].copy()
+    with rasterio.open(raster_path) as src:
+        bounds = src.bounds
+
+    grid_clean = grid_subset.cx[bounds.left:bounds.right, bounds.bottom:bounds.top]
     if grid_clean.empty:
         return None
 
-    def run_gdaldem(mode, r_path):
-        tmp = tempfile.NamedTemporaryFile(suffix=".tif", delete=False).name
-        subprocess.run(["gdaldem", mode, "-co", "COMPRESS=DEFLATE", str(r_path), tmp, "-compute_edges"], 
-                       check=True, capture_output=True)
-        return tmp
+    slope_path = ensure_derived_tile(raster_path, "slope")
+    tri_path = ensure_derived_tile(raster_path, "TRI")
 
-    slope_path = run_gdaldem("slope", raster_path)
-    tri_path = run_gdaldem("TRI", raster_path)
+    with rasterio.open(raster_path) as src:
+        alt = pd.DataFrame(zonal_stats(grid_clean, src.read(1), stats="mean", nodata=-32768, affine=src.transform))
+    with rasterio.open(slope_path) as src:
+        slope = pd.DataFrame(zonal_stats(grid_clean, src.read(1), stats="mean", nodata=-9999, affine=src.transform))
+    with rasterio.open(tri_path) as src:
+        rug = pd.DataFrame(zonal_stats(grid_clean, src.read(1), stats="mean", nodata=-9999, affine=src.transform))
 
-    try:
-        with rasterio.open(raster_path) as src:
-            alt = pd.DataFrame(zonal_stats(grid_clean, src.read(1), stats="mean", nodata=-32768, affine=src.transform))
-        with rasterio.open(slope_path) as src:
-            slope = pd.DataFrame(zonal_stats(grid_clean, src.read(1), stats="mean", nodata=-9999, affine=src.transform))
-        with rasterio.open(tri_path) as src:
-            rug = pd.DataFrame(zonal_stats(grid_clean, src.read(1), stats="mean", nodata=-9999, affine=src.transform))
-        
-        # Consolidate results
-        res = pd.DataFrame({
-            "id": grid_clean["id"].values,
-            "mean_elev": alt["mean"].values,
-            "mean_slope": slope["mean"].values,
-            "mean_rug": rug["mean"].values
-        })
-        return res
-    finally:
-        for p in [slope_path, tri_path]:
-            if os.path.exists(p): os.remove(p)
+    # Consolidate results
+    res = pd.DataFrame({
+        "id": grid_clean["id"].values,
+        "mean_elev": alt["mean"].values,
+        "mean_slope": slope["mean"].values,
+        "mean_rug": rug["mean"].values
+    })
+    return res
 
 # -------------------------------------------------------------------
 # Spatial Processing
@@ -202,6 +240,12 @@ def process_country(iso, global_grid, global_shp, tiles_df, out_path, data_path)
     grid_c = global_grid[global_grid.iso3 == iso].copy()
     shp_c = global_shp[global_shp.GID_0 == iso].copy()
 
+    # Drop antimeridian-crossing polygons once for the whole country. This used
+    # to run inside every tile task, rescanning the full country grid n_tiles
+    # times to reach the same answer. Kept separate from grid_c because the
+    # coastal step below still wants the unfiltered cells.
+    grid_terrain = grid_c[~grid_c["geometry"].apply(is_antimeridian_crossing)]
+
     # Retrieve pre-calculated tiles from tiles_df ---
     iso_tiles_data = tiles_df[tiles_df['iso3'] == iso]
     
@@ -220,9 +264,18 @@ def process_country(iso, global_grid, global_shp, tiles_df, out_path, data_path)
         for col in ["mean_elev", "mean_slope", "mean_rug"]: 
             df_terrain[col] = np.nan
     else:
-        workers = max(1, min(len(tile_paths), cpu_count() // 2))
+        # Build the gdaldem derivatives up front, in parallel across all cores.
+        # They are cached per tile, so a tile shared with an already-processed
+        # neighbour costs nothing here.
+        workers = max(1, min(len(tile_paths), cpu_count()))
         with Pool(processes=workers) as pool:
-            tile_results = pool.starmap(run_terrain_task, [(grid_c, p) for p in tile_paths])
+            pool.starmap(
+                ensure_derived_tile,
+                [(p, mode) for p in tile_paths for mode in ("slope", "TRI")],
+            )
+            tile_results = pool.starmap(
+                run_terrain_task, [(grid_terrain, p) for p in tile_paths]
+            )
 
         valid_results = [r for r in tile_results if r is not None]
         if valid_results:
