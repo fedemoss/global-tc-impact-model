@@ -1,7 +1,7 @@
 import logging
 import os
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import geopandas as gpd
 import numpy as np
@@ -10,7 +10,7 @@ import rasterio
 from rasterstats import zonal_stats
 from shapely.geometry import box
 
-from src.config import INPUT_DIR, OUTPUT_DIR
+from src.config import EXCLUDED_ISO3, INPUT_DIR, OUTPUT_DIR, RASTER_WORKERS
 
 logger = logging.getLogger(__name__)
 
@@ -56,14 +56,20 @@ def select_tiles_by_country(tif_paths, grid_country, buffer_deg=0.5):
     return selected
 
 
-def process_single_country_flood(iso, grid_global, tile_paths, out_dir):
-    """Calculates max flood risk per grid cell across all relevant tiles."""
+def process_single_country_flood(iso, grid_country, tile_paths, out_dir):
+    """Calculates max flood risk per grid cell across all relevant tiles.
+
+    `grid_country` is this country's cells only. It used to receive the whole
+    global grid and filter inside, which meant every worker held all 2.2M cells
+    and -- worse -- the zonal pass below ran over the full country grid once per
+    tile. Cells are now clipped to each tile's bounds first, since a cell
+    outside them cannot contribute to that tile's maximum anyway.
+    """
     out_path = out_dir / f"flood_risk_{iso}.csv"
     if out_path.exists():
         logger.info(f"Skipping {iso}: file already exists")
         return
 
-    grid_country = grid_global[grid_global.iso3 == iso].copy()
     if grid_country.empty:
         logger.warning(f"No grid cells for {iso}; skipping flood risk.")
         return
@@ -74,18 +80,31 @@ def process_single_country_flood(iso, grid_global, tile_paths, out_dir):
         logger.warning(f"No flood tiles overlap {iso}; writing NaNs.")
         grid_country["flood_risk"] = np.nan
     else:
-        per_tile_max = []
+        # Running maximum per cell id. np.fmax propagates the non-NaN operand,
+        # which is what the previous np.nanmax over the stacked per-tile rows
+        # did, but without materialising n_tiles x n_cells values.
+        running = pd.Series(np.nan, index=grid_country["id"].values, dtype=float)
         for tif in relevant_tiles:
             with rasterio.open(tif) as src:
+                bounds = src.bounds
+                sub = grid_country.cx[bounds.left:bounds.right,
+                                      bounds.bottom:bounds.top]
+                if sub.empty:
+                    continue
                 stats = zonal_stats(
-                    grid_country, tif, stats=["max"],
+                    sub, tif, stats=["max"],
                     nodata=src.nodata, all_touched=True,
                 )
-            per_tile_max.append([s["max"] if s["max"] is not None else np.nan for s in stats])
+            vals = pd.Series(
+                [s["max"] if s["max"] is not None else np.nan for s in stats],
+                index=sub["id"].values, dtype=float,
+            )
+            running = pd.Series(
+                np.fmax(running.values, vals.reindex(running.index).values),
+                index=running.index,
+            )
 
-        stacked = np.array(per_tile_max, dtype=float)
-        with np.errstate(invalid="ignore"):
-            grid_country["flood_risk"] = np.nanmax(stacked, axis=0)
+        grid_country["flood_risk"] = running.reindex(grid_country["id"].values).values
 
     grid_country[["id", "iso3", "flood_risk"]].to_csv(out_path, index=False)
     logger.info(f"Flood risk written for {iso} ({len(relevant_tiles)} tiles).")
@@ -107,12 +126,19 @@ def process_all_flood():
     out_dir = OUTPUT_DIR / "FloodRisk" / "grid_data"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    valid_iso3 = grid.iso3.unique()
+    valid_iso3 = [iso for iso in grid.iso3.unique() if iso not in EXCLUDED_ISO3]
     logger.info(f"Processing flood risk for {len(valid_iso3)} countries...")
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    # Processes, not threads: zonal_stats spends its time in Python-level
+    # per-cell work that holds the GIL, so the previous ThreadPoolExecutor ran
+    # four workers at roughly one core's throughput. Each task is handed only
+    # its own country's cells, so the global grid is never pickled.
+    with ProcessPoolExecutor(max_workers=RASTER_WORKERS) as executor:
         futures = {
-            executor.submit(process_single_country_flood, iso, grid, tile_paths, out_dir): iso
+            executor.submit(
+                process_single_country_flood,
+                iso, grid[grid.iso3 == iso].copy(), tile_paths, out_dir,
+            ): iso
             for iso in valid_iso3
         }
         for future in as_completed(futures):
