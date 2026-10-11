@@ -16,6 +16,7 @@ for near-real-time work.
 """
 import io
 import logging
+import threading
 import os
 import time
 import zipfile
@@ -43,13 +44,24 @@ def gis_url(date):
     return f"{NASA_PPS_BASE_URL}{date.year}/{date.month:02d}/{date.day:02d}/gis"
 
 
-def list_files(url, session, suffix=".zip"):
+def list_files(url, session, suffix=".zip", timeout=120):
     """Names in a PPS listing ending with `suffix`, as absolute URLs.
 
     The granule filenames carry a varying numeric field, so they are read from
     the listing rather than constructed.
+
+    The timeout is not optional in practice: the granule downloads below already
+    pass one, but this listing call did not, and a PPS connection that stops
+    responding mid-listing then blocks forever with no error and no log line.
+    That is exactly how the 2026-10-11 run died -- the process sat in
+    futex_wait_queue_me for over four hours, holding open sockets, having
+    written its last granule at 19:28.
     """
-    response = session.get(url, auth=(USERNAME, PASSWORD))
+    try:
+        response = session.get(url, auth=(USERNAME, PASSWORD), timeout=timeout)
+    except requests.exceptions.RequestException as exc:
+        logging.error(f"Listing {url} failed: {exc}")
+        return []
     if not response.ok:
         logging.error(f"Listing {url} failed with HTTP {response.status_code}")
         return []
@@ -194,9 +206,20 @@ def download_gpm_daily_run(start_date, end_date, typhoon_name=None, max_workers=
     daily_gpm_dir().mkdir(parents=True, exist_ok=True)
     date_list = pd.date_range(start_date, end_date)
 
-    with requests.Session() as session:
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            results = list(executor.map(lambda d: _download_daily_one(d, session), date_list))
+    # One Session per worker thread, not one shared across them. requests'
+    # Session is not thread-safe: its connection pool can be mutated from
+    # several threads at once, which risks exactly the kind of silent lock-up
+    # seen on 2026-10-11. thread-local storage gives each thread its own while
+    # still reusing connections within that thread.
+    local = threading.local()
+
+    def _session():
+        if not hasattr(local, "session"):
+            local.session = requests.Session()
+        return local.session
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = list(executor.map(lambda d: _download_daily_one(d, _session()), date_list))
 
     missing = [d.strftime("%Y%m%d") for d, ok in zip(date_list, results) if not ok]
     if missing:
