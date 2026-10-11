@@ -89,7 +89,7 @@ def compute_metrics_at_threshold(
 
 def bootstrap_binary_metrics(
     df,
-    event_col="DisNo.",
+    event_col="sid",
     thresholds=(0, 15),
     target_col="perc_affected_pop_grid_region",
     pred_col="prediction_perc",

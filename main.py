@@ -112,7 +112,7 @@ def main():
     # --- OPTIONAL SCIENCE ---
     if args.run_models:
         logging.info("Science: Running 2-Stage XGBoost Model...")
-        execute_training_run("2-stage-XGBoost", strategy="global", aggregate_to_adm1=True)
+        execute_training_run("2-stage-XGBoost", strategy="global", aggregate_to_adm1=True, event_col="sid")
 
     if args.run_interpretability:
         logging.info("Science: Running SHAP Analysis...")

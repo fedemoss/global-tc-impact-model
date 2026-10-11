@@ -84,11 +84,14 @@ def prepare_data(aggregate_to_adm1=False):
     return df.drop_duplicates()
 
 
-def execute_training_run(model_name, strategy, aggregate_to_adm1=False, event_col="DisNo."):
+def execute_training_run(model_name, strategy, aggregate_to_adm1=False, event_col="sid"):
     """Orchestrates the data prep and LOOCV execution for a specific model and strategy.
 
-    `event_col` is the LOOCV grouping unit: "DisNo." (the paper's country-event
-    record, default) or "sid" (the physical cyclone -- see run_loocv_pipeline).
+    `event_col` is the LOOCV grouping unit: "sid" (the physical cyclone --
+    default, matching the revised manuscript, the hyperparameter search and the
+    bootstrap) or "DisNo." (the round-1 country-event record, kept as an
+    explicit option so the old grouping can be reproduced for the response
+    letter's before/after comparison).
     """
     logger.info("--- Starting Run ---")
     logger.info(f"Model: {model_name}")
@@ -135,7 +138,7 @@ def execute_training_run(model_name, strategy, aggregate_to_adm1=False, event_co
 
     level_str = "adm1" if aggregate_to_adm1 else "grid"
     output_folder = f"model_output/{model_name}_{strategy}_{level_str}"
-    if event_col != "DisNo.":
+    if event_col != "sid":
         # Keep non-default grouping in its own directory: fold filenames are
         # built from the grouping key, so mixing them would corrupt the
         # resume check and the compiled predictions file.
