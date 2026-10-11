@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 from multiprocessing import Pool, cpu_count
@@ -16,6 +17,26 @@ from src.config import INPUT_DIR, OUTPUT_DIR
 from src.utils.geo_utils import adjust_longitude, is_antimeridian_crossing
 
 logger = logging.getLogger(__name__)
+
+
+def require_gdaldem():
+    """Fail loudly, once, if the gdaldem binary is not on PATH.
+
+    Terrain features shell out to `gdaldem` (a PATH lookup), while the rest of
+    the module only needs importable Python packages. Running the pipeline with
+    the env's interpreter but without its bin/ on PATH therefore imports fine
+    and then fails per country, which previously logged the same
+    FileNotFoundError 260 times while the stage still reported success. Checking
+    up front turns that into one actionable error before any work is done.
+    """
+    if shutil.which("gdaldem") is None:
+        raise RuntimeError(
+            "gdaldem not found on PATH. It ships with GDAL; if GDAL came from "
+            "conda, activate the environment (or add its bin/ to PATH) so the "
+            "binary resolves, not just the Python packages. See the README's "
+            "Prerequisites section."
+        )
+
 
 # -------------------------------------------------------------------
 # Raster Tile Management
@@ -225,6 +246,8 @@ def process_country(iso, global_grid, global_shp, tiles_df, out_path, data_path)
 
 def process_all_srtm():
     """Entry point for global SRTM processing."""
+    require_gdaldem()
+
     out_path = OUTPUT_DIR / "SRTM" / "grid_data"
     data_path = INPUT_DIR / "SRTM" / "tiles"
     out_path.mkdir(parents=True, exist_ok=True)
