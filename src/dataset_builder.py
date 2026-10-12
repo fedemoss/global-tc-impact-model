@@ -7,18 +7,21 @@ from src.config import INPUT_DIR, OUTPUT_DIR, resolve_iso3_list
 from src.utils.exposure import load_time_varying_features
 from src.utils.time_interpolation import event_year_from_disno
 
-def load_grid_gid_mapping(iso3):
+def load_grid_gid_mapping(iso3, grid_global=None, adm_global=None):
     """
     Spatially joins grid cell centroids to their GID_1/GID_2 administrative unit.
     Mirrors the enrichment done in process_shdi.py::process_all_shdi, since the
     grid produced by grid_cells.py only carries GID_0 (country-level).
+
+    `grid_global` and `adm_global` let the caller read the two GeoPackages once
+    and reuse them across countries; both are read here only when not supplied.
     """
     grid_path = INPUT_DIR / "GRID" / "merged" / "global_grid_land_overlap.gpkg"
     adm2_path = INPUT_DIR / "SHP" / "global_shapefile_GID_adm2.gpkg"
     if not grid_path.exists() or not adm2_path.exists():
         return pd.DataFrame(columns=["id", "iso3", "GID_1", "GID_2"])
 
-    grid = gpd.read_file(grid_path)
+    grid = grid_global if grid_global is not None else gpd.read_file(grid_path)
     grid = grid[grid.iso3 == iso3].copy()
     if grid.empty:
         return pd.DataFrame(columns=["id", "iso3", "GID_1", "GID_2"])
@@ -32,7 +35,7 @@ def load_grid_gid_mapping(iso3):
         df_grid_map["GID_2"] = None
         return df_grid_map
 
-    adm_country = gpd.read_file(adm2_path)
+    adm_country = adm_global if adm_global is not None else gpd.read_file(adm2_path)
     adm_country = adm_country[adm_country.GID_0 == iso3]
     if adm_country.empty:
         return national_fallback()
@@ -122,17 +125,21 @@ def load_static_features(iso3):
     return df_static.drop(columns=["GID_1", "GID_2"], errors="ignore")
 
 
-def build_country_dataset(iso3, df_meta, df_impact_master):
+def build_country_dataset(iso3, df_meta, df_impact_master,
+                          grid_global=None, adm_global=None):
     """
     Core Logic: Maps grid-level hazard intensity to sub-national impact targets.
+
+    `grid_global` and `adm_global` are passed through to load_grid_gid_mapping
+    so the GeoPackages are read once per run rather than once per country.
     """
     # 1. Load Wind Exposure (Grid level: 'id')
     wind_path = OUTPUT_DIR / "IBTRACS" / "standard" / f"windfield_data_{iso3}.csv"
     if not wind_path.exists(): return None
     df_wind = pd.read_csv(wind_path).rename(columns={"grid_point_id": "id", "GID_0": "iso3"})
-    
+
     # 2. Load Grid-to-GID Mapping (Crucial for sub-national alignment)
-    df_grid_map = load_grid_gid_mapping(iso3)
+    df_grid_map = load_grid_gid_mapping(iso3, grid_global=grid_global, adm_global=adm_global)
     if df_grid_map.empty: return None
 
     # 3. Merge Wind with Grid Mapping
@@ -216,14 +223,35 @@ def compile_global_dataset():
         
     impact_path = OUTPUT_DIR / "EMDAT" / "impact_data.csv"
     if not impact_path.exists(): return
-    df_impact_master = pd.read_csv(impact_path)
+
+    # Only the columns the per-country merges below consume. The grid-level
+    # impact table carries a row per (event, cell) for the whole globe, so
+    # reading it in full is the largest single allocation in this function.
+    impact_cols = ["sid", "GID_0", "GID_1", "GID_2", "iso3", "level",
+                   "Total Affected", "perc_affected_pop_grid_region"]
+    df_impact_master = pd.read_csv(
+        impact_path, usecols=lambda c: c in impact_cols)
+    # iso3 only: it is used to select a country's rows, never as a merge or
+    # groupby key, so narrowing it cannot change how the joins below behave.
+    if "iso3" in df_impact_master.columns:
+        df_impact_master["iso3"] = df_impact_master["iso3"].astype("category")
+    logger.info(f"Impact table loaded: {len(df_impact_master):,} rows")
+
+    # Read the two GeoPackages once and reuse them for every country, rather
+    # than re-reading the global grid inside load_grid_gid_mapping each time.
+    grid_path = INPUT_DIR / "GRID" / "merged" / "global_grid_land_overlap.gpkg"
+    adm2_path = INPUT_DIR / "SHP" / "global_shapefile_GID_adm2.gpkg"
+    grid_global = gpd.read_file(grid_path) if grid_path.exists() else None
+    adm_global = gpd.read_file(adm2_path) if adm2_path.exists() else None
 
     master_dataset = []
     for iso3 in resolve_iso3_list():
-        df_country = build_country_dataset(iso3, df_meta, df_impact_master)
+        df_country = build_country_dataset(
+            iso3, df_meta, df_impact_master,
+            grid_global=grid_global, adm_global=adm_global)
         if df_country is not None and not df_country.empty:
             master_dataset.append(df_country)
-            
+
     if not master_dataset: return
     df_master = pd.concat(master_dataset, ignore_index=True)
     
