@@ -68,13 +68,55 @@ def load_grid_gid_mapping(iso3, grid_global=None, adm_global=None):
 logger = logging.getLogger(__name__)
 
 # Global CSV layers are country-agnostic but are consumed inside the per-country
-# loop. Reading them once per process keeps compile_global_dataset from
-# re-reading hundreds of megabytes for every country it iterates.
+# loop, so reading them per country costs hundreds of megabytes of I/O each
+# time. Small layers are cached whole; large ones are split by country on first
+# use, since holding several tens of millions of rows at once does not fit
+# alongside the impact table and the two GeoPackages.
 _GLOBAL_LAYER_CACHE = {}
+_SPLIT_CHUNK_ROWS = 1_000_000
+
+
+def _split_dir(path):
+    return Path(path).parent / "_by_iso3" / Path(path).stem
+
+
+def _ensure_split_by_iso3(path, key="iso3", rename=None):
+    """Split a global CSV into one CSV per country, once, streaming by chunk."""
+    out_dir = _split_dir(path)
+    marker = out_dir / "_complete"
+    if marker.exists():
+        return out_dir
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    rows = 0
+    for chunk in pd.read_csv(path, chunksize=_SPLIT_CHUNK_ROWS):
+        if rename:
+            chunk = chunk.rename(columns=rename)
+        if key not in chunk.columns:
+            shutil.rmtree(out_dir)
+            raise KeyError(f"{Path(path).name} has no '{key}' column to split on")
+        for iso, group in chunk.groupby(key, observed=True):
+            dest = out_dir / f"{iso}.csv"
+            group.to_csv(dest, mode="a", header=not dest.exists(), index=False)
+        rows += len(chunk)
+    marker.touch()
+    logger.info(f"Split {Path(path).name} by country: {rows:,} rows")
+    return out_dir
+
+
+def _load_country_layer(path, iso3, key="iso3", rename=None):
+    """Return one country's rows from a global CSV, without holding the whole."""
+    out_dir = _ensure_split_by_iso3(path, key=key, rename=rename)
+    dest = out_dir / f"{iso3}.csv"
+    if not dest.exists():
+        return None
+    return pd.read_csv(dest)
 
 
 def _load_global_layer(path, rename=None):
-    """Read a global CSV once and reuse it for every country."""
+    """Read a small global CSV once and reuse it for every country."""
     key = str(path)
     if key not in _GLOBAL_LAYER_CACHE:
         df = pd.read_csv(path)
@@ -148,13 +190,14 @@ def load_static_features(iso3):
     return df_static.drop(columns=["GID_1", "GID_2"], errors="ignore")
 
 
-def build_country_dataset(iso3, df_meta, df_impact_master,
+def build_country_dataset(iso3, df_meta, df_impact_country,
                           grid_global=None, adm_global=None):
     """
     Core Logic: Maps grid-level hazard intensity to sub-national impact targets.
 
-    `grid_global` and `adm_global` are passed through to load_grid_gid_mapping
-    so the GeoPackages are read once per run rather than once per country.
+    `df_impact_country` holds only this country's rows of the grid-level impact
+    table. `grid_global` and `adm_global` are passed through to
+    load_grid_gid_mapping so the GeoPackages are read once per run.
     """
     # 1. Load Wind Exposure (Grid level: 'id')
     wind_path = OUTPUT_DIR / "IBTRACS" / "standard" / f"windfield_data_{iso3}.csv"
@@ -170,7 +213,9 @@ def build_country_dataset(iso3, df_meta, df_impact_master,
 
     # 4. Merge with Impact Targets (Inner Join on sid AND GID)
     # This ensures a grid cell only gets a 'Total Affected' value if its parent GID was affected
-    df_impact_country = df_impact_master[df_impact_master["iso3"] == iso3].copy()
+    if df_impact_country is None or df_impact_country.empty:
+        return None
+    df_impact_country = df_impact_country.copy()
     df_impact_country[["GID_1", "GID_2"]] = df_impact_country[["GID_1", "GID_2"]].astype(object)
 
     is_national_level = (df_grid_map["GID_1"] == iso3).all()
@@ -204,8 +249,10 @@ def build_country_dataset(iso3, df_meta, df_impact_master,
     # 6. Merge Historical Frequency
     hist_path = OUTPUT_DIR / "features" / "historical_events_feature.csv"
     if hist_path.exists():
-        df_hist = _load_global_layer(hist_path)
-        df_dyn = df_dyn.merge(df_hist[df_hist.iso3 == iso3], on=["id", "iso3", "DisNo."], how="left")
+        df_hist = _load_country_layer(hist_path, iso3)
+        if df_hist is None:
+            df_hist = pd.DataFrame(columns=["id", "iso3", "DisNo.", "N_events_5_years"])
+        df_dyn = df_dyn.merge(df_hist, on=["id", "iso3", "DisNo."], how="left")
         df_dyn["N_events_5_years"] = df_dyn["N_events_5_years"].fillna(0)
     else:
         # Silently skipping this merge is how N_events_5_years goes missing from
@@ -247,18 +294,10 @@ def compile_global_dataset():
     impact_path = OUTPUT_DIR / "EMDAT" / "impact_data.csv"
     if not impact_path.exists(): return
 
-    # Only the columns the per-country merges below consume. The grid-level
-    # impact table carries a row per (event, cell) for the whole globe, so
-    # reading it in full is the largest single allocation in this function.
-    impact_cols = ["sid", "GID_0", "GID_1", "GID_2", "iso3", "level",
-                   "Total Affected", "perc_affected_pop_grid_region"]
-    df_impact_master = pd.read_csv(
-        impact_path, usecols=lambda c: c in impact_cols)
-    # iso3 only: it is used to select a country's rows, never as a merge or
-    # groupby key, so narrowing it cannot change how the joins below behave.
-    if "iso3" in df_impact_master.columns:
-        df_impact_master["iso3"] = df_impact_master["iso3"].astype("category")
-    logger.info(f"Impact table loaded: {len(df_impact_master):,} rows")
+    # The grid-level impact table carries a row per (event, cell) for the whole
+    # globe. It is split by country on first use rather than held in memory,
+    # since the per-country slice is all any single merge below consumes.
+    _ensure_split_by_iso3(impact_path)
 
     # Read the two GeoPackages once and reuse them for every country, rather
     # than re-reading the global grid inside load_grid_gid_mapping each time.
@@ -287,8 +326,9 @@ def compile_global_dataset():
     shdi_chunks = []
     written = 0
     for n, iso3 in enumerate(iso3_list, 1):
+        df_impact_country = _load_country_layer(impact_path, iso3)
         df_country = build_country_dataset(
-            iso3, df_meta, df_impact_master,
+            iso3, df_meta, df_impact_country,
             grid_global=grid_global, adm_global=adm_global)
         if df_country is None or df_country.empty:
             continue
@@ -310,7 +350,7 @@ def compile_global_dataset():
     # The SHDI median is the one statistic that needs every country, so it is
     # computed from the collected column alone rather than the full frames.
     shdi_median = pd.concat(shdi_chunks).median() if shdi_chunks else None
-    del shdi_chunks, df_impact_master, grid_global, adm_global
+    del shdi_chunks, grid_global, adm_global
     gc.collect()
 
     columns = sorted(columns)
