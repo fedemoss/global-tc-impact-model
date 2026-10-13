@@ -1,6 +1,8 @@
 import logging
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from src.config import INPUT_DIR, FEATURES
 from src.evaluation.cv_strategies import run_loocv_pipeline
@@ -33,9 +35,43 @@ def _attach_event_date(df):
     return df.merge(emdat_red[["DisNo.", "date"]], on="DisNo.", how="left")
 
 
+# Columns the training path consumes. The dataset also carries per-cell
+# geometry and other build-time fields that nothing downstream reads; at global
+# coverage they account for the majority of the frame's footprint.
+_TRAINING_COLUMNS = sorted(set(FEATURES) | {
+    "DisNo.", "GID_0", "GID_1", "GID_2", "id", "iso3", "level", "sid", "year",
+    "Total Affected", "perc_affected_pop_grid_region",
+})
+
+
+def load_training_dataset(path=None):
+    """Read the training dataset with only the columns the model needs.
+
+    Identifier columns repeat heavily -- 34M rows carry 884 distinct events and
+    68 countries -- so they are read as dictionaries and kept categorical. This
+    is the difference between a frame that fits in memory and one that does not;
+    every groupby over these columns therefore passes observed=True, which
+    matches the behaviour of the equivalent object-dtype groupby.
+    """
+    path = path or INPUT_DIR / "model_input_dataset" / "training_dataset.parquet"
+    available = set(pq.read_schema(path).names)
+    columns = [c for c in _TRAINING_COLUMNS if c in available]
+    missing = [c for c in _TRAINING_COLUMNS if c not in available]
+    if missing:
+        logger.warning(f"Training dataset is missing columns: {missing}")
+    table = pq.read_table(path, columns=columns)
+    # self_destruct frees each Arrow column as it is converted instead of
+    # holding the whole table alongside the DataFrame; without it the Arrow
+    # buffers stay resident and roughly triple the footprint of the load.
+    df = table.to_pandas(strings_to_categorical=True, self_destruct=True)
+    del table
+    pa.default_memory_pool().release_unused()
+    return df
+
+
 def prepare_data(aggregate_to_adm1=False):
     """Loads dataset, applies subnational filters, and optionally aggregates to ADM1 non-grid level."""
-    df = pd.read_parquet(INPUT_DIR / "model_input_dataset" / "training_dataset.parquet")
+    df = load_training_dataset()
     df = df.drop_duplicates().reset_index(drop=True)
 
     regions = pd.read_csv(INPUT_DIR / "model_input_dataset" / "un_regions.csv")
@@ -48,14 +84,14 @@ def prepare_data(aggregate_to_adm1=False):
     proportions = (
         df[df["level"] != "ADM0"]
         .assign(is_affected=lambda x: x["Total Affected"] > 0)
-        .groupby(["DisNo.", "GID_0", "GID_1"])["is_affected"].max()
-        .groupby(["DisNo.", "GID_0"]).mean()
+        .groupby(["DisNo.", "GID_0", "GID_1"], observed=True)["is_affected"].max()
+        .groupby(["DisNo.", "GID_0"], observed=True).mean()
         .reset_index(name="proportion_affected_gid1")
     )
     # Countries with no usable GID_1 breakdown (see dataset_builder.py's national
     # fallback, e.g. ATG) are evaluated at GID_0 — a single "region" per event is
     # always 100% affected by construction, so the proportion check doesn't apply.
-    n_gid1_units = df[df["level"] != "ADM0"].groupby("GID_0")["GID_1"].nunique()
+    n_gid1_units = df[df["level"] != "ADM0"].groupby("GID_0", observed=True)["GID_1"].nunique()
     single_region_countries = n_gid1_units[n_gid1_units <= 1].index
     events_to_consider_c3 = proportions[
         (proportions.proportion_affected_gid1 < 1) | (proportions.GID_0.isin(single_region_countries))
@@ -79,7 +115,7 @@ def prepare_data(aggregate_to_adm1=False):
             "N_events_5_years": "max",
         })
         groupby_keys = ["DisNo.", "sid", "level", "GID_0", "GID_1", "iso3", "cyclone_basin", "date"]
-        df = df.groupby(groupby_keys, dropna=False).agg(agg_dict).reset_index()
+        df = df.groupby(groupby_keys, dropna=False, observed=True).agg(agg_dict).reset_index()
 
     return df.drop_duplicates()
 
