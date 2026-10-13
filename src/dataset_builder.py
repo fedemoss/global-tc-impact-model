@@ -1,8 +1,14 @@
+import gc
 import logging
 import os
-import pandas as pd
-import geopandas as gpd
+import shutil
 from pathlib import Path
+
+import geopandas as gpd
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+
 from src.config import INPUT_DIR, OUTPUT_DIR, resolve_iso3_list
 from src.utils.exposure import load_time_varying_features
 from src.utils.time_interpolation import event_year_from_disno
@@ -244,32 +250,73 @@ def compile_global_dataset():
     grid_global = gpd.read_file(grid_path) if grid_path.exists() else None
     adm_global = gpd.read_file(adm2_path) if adm2_path.exists() else None
 
-    master_dataset = []
-    for iso3 in resolve_iso3_list():
+    fill_0 = ["mean_elev", "mean_slope", "mean_rug", "urban", "rural", "water",
+              "storm_tide_rp_0010", "landslide_risk_sum", "flood_risk", "population",
+              "coast_length_meters"]
+
+    out_path = INPUT_DIR / "model_input_dataset"
+    out_path.mkdir(parents=True, exist_ok=True)
+    parts_dir = out_path / "_parts"
+    if parts_dir.exists():
+        shutil.rmtree(parts_dir)
+    parts_dir.mkdir(parents=True)
+
+    # Countries are written to per-country Parquet parts rather than held in a
+    # list for one concatenation. Only a minority of countries have wind data,
+    # but their combined frame is still far larger than the per-country peak,
+    # and concatenating requires a second copy of all of it at once.
+    iso3_list = resolve_iso3_list()
+    columns = set()
+    shdi_chunks = []
+    written = 0
+    for n, iso3 in enumerate(iso3_list, 1):
         df_country = build_country_dataset(
             iso3, df_meta, df_impact_master,
             grid_global=grid_global, adm_global=adm_global)
-        if df_country is not None and not df_country.empty:
-            master_dataset.append(df_country)
+        if df_country is None or df_country.empty:
+            continue
+        for col in fill_0:
+            if col in df_country.columns:
+                df_country[col] = df_country[col].fillna(0)
+        if "shdi" in df_country.columns:
+            shdi_chunks.append(df_country["shdi"].dropna())
+        columns.update(df_country.columns)
+        df_country.to_parquet(parts_dir / f"{iso3}.parquet", index=False)
+        written += 1
+        logger.info(f"[{n}/{len(iso3_list)}] {iso3}: {len(df_country):,} rows")
+        del df_country
 
-    if not master_dataset: return
-    df_master = pd.concat(master_dataset, ignore_index=True)
-    
-    # Fill structural zeros for hazard/exposure columns
-    fill_0 = ["mean_elev", "mean_slope", "mean_rug", "urban", "rural", "water",
-              "storm_tide_rp_0010", "landslide_risk_sum", "flood_risk", "population", "coast_length_meters"]
-    for col in fill_0:
-        if col in df_master.columns:
-            df_master[col] = df_master[col].fillna(0)
-    
-    # Median fill for SHDI
-    if "shdi" in df_master.columns:
-        df_master["shdi"] = df_master["shdi"].fillna(df_master["shdi"].median())
-    
-    out_path = INPUT_DIR / "model_input_dataset"
-    out_path.mkdir(parents=True, exist_ok=True)
-    df_master.to_parquet(out_path / "training_dataset.parquet", index=False)
-    logger.info(f"Master training dataset saved. Total rows: {len(df_master)}")
+    if not written:
+        shutil.rmtree(parts_dir)
+        return
+
+    # The SHDI median is the one statistic that needs every country, so it is
+    # computed from the collected column alone rather than the full frames.
+    shdi_median = pd.concat(shdi_chunks).median() if shdi_chunks else None
+    del shdi_chunks, df_impact_master, grid_global, adm_global
+    gc.collect()
+
+    columns = sorted(columns)
+    final_path = out_path / "training_dataset.parquet"
+    writer = None
+    total_rows = 0
+    try:
+        for part in sorted(parts_dir.glob("*.parquet")):
+            df_part = pd.read_parquet(part).reindex(columns=columns)
+            if shdi_median is not None and "shdi" in df_part.columns:
+                df_part["shdi"] = df_part["shdi"].fillna(shdi_median)
+            table = pa.Table.from_pandas(df_part, preserve_index=False)
+            if writer is None:
+                writer = pq.ParquetWriter(final_path, table.schema)
+            writer.write_table(table)
+            total_rows += len(df_part)
+            del df_part, table
+    finally:
+        if writer is not None:
+            writer.close()
+
+    shutil.rmtree(parts_dir)
+    logger.info(f"Master training dataset saved. Total rows: {total_rows:,}")
 
 
 if __name__ == "__main__":
