@@ -67,6 +67,23 @@ def load_grid_gid_mapping(iso3, grid_global=None, adm_global=None):
 
 logger = logging.getLogger(__name__)
 
+# Global CSV layers are country-agnostic but are consumed inside the per-country
+# loop. Reading them once per process keeps compile_global_dataset from
+# re-reading hundreds of megabytes for every country it iterates.
+_GLOBAL_LAYER_CACHE = {}
+
+
+def _load_global_layer(path, rename=None):
+    """Read a global CSV once and reuse it for every country."""
+    key = str(path)
+    if key not in _GLOBAL_LAYER_CACHE:
+        df = pd.read_csv(path)
+        if rename:
+            df = df.rename(columns=rename)
+        _GLOBAL_LAYER_CACHE[key] = df
+        logger.info(f"Cached global layer {Path(path).name}: {len(df):,} rows")
+    return _GLOBAL_LAYER_CACHE[key]
+
 def load_static_features(iso3):
     """
     Loads and merges all static spatial features for a specific country.
@@ -108,7 +125,7 @@ def load_static_features(iso3):
     # Landslide Risk
     landslide_path = OUTPUT_DIR / "LandSlides" / "global_grid_landslide_risk.csv"
     if landslide_path.exists():
-        df_land = pd.read_csv(landslide_path)
+        df_land = _load_global_layer(landslide_path)
         # Filter global data to the specific country during merge
         df_static = df_static.merge(
             df_land[df_land.iso3 == iso3], 
@@ -119,7 +136,7 @@ def load_static_features(iso3):
     # Storm Surge Risk
     surge_path = OUTPUT_DIR / "StormSurges" / "grid_data" / "global_grid_storm_surges_risk.csv"
     if surge_path.exists():
-        df_surge = pd.read_csv(surge_path).rename(columns={"GID_0": "iso3"})
+        df_surge = _load_global_layer(surge_path, rename={"GID_0": "iso3"})
         df_static = df_static.merge(
             df_surge[df_surge.iso3 == iso3], 
             on=["id", "iso3"], 
@@ -187,7 +204,7 @@ def build_country_dataset(iso3, df_meta, df_impact_master,
     # 6. Merge Historical Frequency
     hist_path = OUTPUT_DIR / "features" / "historical_events_feature.csv"
     if hist_path.exists():
-        df_hist = pd.read_csv(hist_path)
+        df_hist = _load_global_layer(hist_path)
         df_dyn = df_dyn.merge(df_hist[df_hist.iso3 == iso3], on=["id", "iso3", "DisNo."], how="left")
         df_dyn["N_events_5_years"] = df_dyn["N_events_5_years"].fillna(0)
     else:
