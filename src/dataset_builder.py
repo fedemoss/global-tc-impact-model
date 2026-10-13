@@ -106,12 +106,14 @@ def _ensure_split_by_iso3(path, key="iso3", rename=None):
     return out_dir
 
 
-def _load_country_layer(path, iso3, key="iso3", rename=None):
+def _load_country_layer(path, iso3, key="iso3", rename=None, usecols=None):
     """Return one country's rows from a global CSV, without holding the whole."""
     out_dir = _ensure_split_by_iso3(path, key=key, rename=rename)
     dest = out_dir / f"{iso3}.csv"
     if not dest.exists():
         return None
+    if usecols is not None:
+        return pd.read_csv(dest, usecols=lambda c: c in set(usecols))
     return pd.read_csv(dest)
 
 
@@ -228,11 +230,16 @@ def build_country_dataset(iso3, df_meta, df_impact_country,
         }).reset_index()
         df_dyn = df_dyn.merge(impact_by_event, on="sid", how="inner")
     else:
-        # We join on GID_1 or GID_2 based on the impact data 'level'
-        # For simplicity, we merge on all GID levels present in the impact registry
+        # Join on the grid cell itself. The impact table already carries a row
+        # per (event, cell), so (sid, id) is unique on both sides and the result
+        # is one row per event-cell. Joining on (sid, GID_1, GID_2) instead is
+        # many-to-many -- hundreds of cells share an administrative unit on each
+        # side -- and multiplies the row count by three to four orders of
+        # magnitude before anything can filter it.
         df_dyn = df_dyn.merge(
-            df_impact_country[["sid", "GID_1", "GID_2", "GID_0", "level", "Total Affected", "perc_affected_pop_grid_region"]],
-            on=["sid", "GID_1", "GID_2"],
+            df_impact_country[["sid", "id", "GID_0", "level", "Total Affected",
+                               "perc_affected_pop_grid_region"]],
+            on=["sid", "id"],
             how="inner"
         )
 
@@ -298,6 +305,10 @@ def compile_global_dataset():
     # globe. It is split by country on first use rather than held in memory,
     # since the per-country slice is all any single merge below consumes.
     _ensure_split_by_iso3(impact_path)
+    # Columns the per-country merges consume. `id` is the grid cell and is the
+    # key the impact join uses; the rest are carried through to the output.
+    impact_cols = ["sid", "id", "GID_0", "GID_1", "GID_2", "iso3", "level",
+                   "Total Affected", "perc_affected_pop_grid_region"]
 
     # Read the two GeoPackages once and reuse them for every country, rather
     # than re-reading the global grid inside load_grid_gid_mapping each time.
@@ -326,7 +337,7 @@ def compile_global_dataset():
     shdi_chunks = []
     written = 0
     for n, iso3 in enumerate(iso3_list, 1):
-        df_impact_country = _load_country_layer(impact_path, iso3)
+        df_impact_country = _load_country_layer(impact_path, iso3, usecols=impact_cols)
         df_country = build_country_dataset(
             iso3, df_meta, df_impact_country,
             grid_global=grid_global, adm_global=adm_global)
