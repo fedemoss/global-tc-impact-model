@@ -365,17 +365,30 @@ def compile_global_dataset():
     gc.collect()
 
     columns = sorted(columns)
+    parts = sorted(parts_dir.glob("*.parquet"))
+
+    # ParquetWriter fixes its schema from the first table it is given, but the
+    # per-country parts disagree on dtype: a column that is entirely missing for
+    # one country arrives as null or float, and as string or int for another.
+    # Unifying the part schemas first, then binding every table to the result,
+    # keeps the write consistent without loading the parts twice.
+    unified = pa.unify_schemas(
+        [pq.read_schema(part) for part in parts], promote_options="permissive")
+    unified = pa.schema([unified.field(name) for name in columns
+                         if name in unified.names])
+
     final_path = out_path / "training_dataset.parquet"
     writer = None
     total_rows = 0
     try:
-        for part in sorted(parts_dir.glob("*.parquet")):
+        for part in parts:
             df_part = pd.read_parquet(part).reindex(columns=columns)
             if shdi_median is not None and "shdi" in df_part.columns:
                 df_part["shdi"] = df_part["shdi"].fillna(shdi_median)
-            table = pa.Table.from_pandas(df_part, preserve_index=False)
+            table = pa.Table.from_pandas(
+                df_part, schema=unified, preserve_index=False)
             if writer is None:
-                writer = pq.ParquetWriter(final_path, table.schema)
+                writer = pq.ParquetWriter(final_path, unified)
             writer.write_table(table)
             total_rows += len(df_part)
             del df_part, table
