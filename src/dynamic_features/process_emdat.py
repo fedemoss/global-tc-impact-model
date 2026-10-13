@@ -83,6 +83,20 @@ def process_impact_geometries(gaul_shp, impact_data):
 
     return combined
 
+# SIDs present in the EM-DAT registry in a form IBTrACS does not carry, mapped
+# to the matching storm in IBTrACS.ALL.v04r01. Each was confirmed by name,
+# season and track bounds. Without the correction the wind step finds no track
+# for the event and the country produces no output.
+SID_CORRECTIONS = {
+    # Seroja, April 2021 (IDN, TLS): registry longitude field reads 123, the
+    # track runs 107.8-123.8E and IBTrACS records 122.
+    "2021093S11123": "2021093S11122",
+    # Cempaka, November 2017 (IDN): registry day-of-year 325 and longitude 112;
+    # IBTrACS carries 329 and 110. No storm uses the 2017325 prefix.
+    "2017325S10112": "2017329S10110",
+}
+
+
 def add_missing_sid(df_impact):
     """Patches known missing SIDs for 2022 events and drops rows with no SID."""
     missing_sid_subset = df_impact[df_impact.sid.isna()][
@@ -130,6 +144,14 @@ def add_missing_sid(df_impact):
         )
         merge_sid["sid"] = merge_sid["sid"].fillna(merge_sid["sid_missing"])
         df_impact = merge_sid.drop(columns=["sid_missing"])
+
+    # Correct SIDs that are present but do not resolve against IBTrACS.
+    present = set(df_impact["sid"].dropna().unique())
+    applied = {k: v for k, v in SID_CORRECTIONS.items() if k in present}
+    if applied:
+        df_impact["sid"] = df_impact["sid"].replace(applied)
+        for old, new in applied.items():
+            logging.info(f"Corrected SID {old} -> {new}")
 
     return df_impact.dropna(subset="sid").reset_index(drop=True)
 
