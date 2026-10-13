@@ -11,6 +11,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import rasterio
+from pyproj import Geod
 from rasterstats import zonal_stats
 from sklearn.neighbors import NearestNeighbors
 
@@ -198,6 +199,17 @@ def spatial_interpolation(df, columns):
     
     return df.drop(columns=["centroid"])
 
+# Geodesic measurement on the WGS84 ellipsoid, shared by all countries.
+_GEOD = Geod(ellps="WGS84")
+
+
+def _geodesic_length(geom):
+    """Length of a lon/lat geometry in metres, measured on the ellipsoid."""
+    if geom is None or geom.is_empty:
+        return 0.0
+    return abs(_GEOD.geometry_length(geom))
+
+
 def get_coast_features(shp_country, grid_country):
     """Calculates coastline binary flag and length in meters."""
     dissolved = shp_country.dissolve(by="GID_0")
@@ -206,13 +218,13 @@ def get_coast_features(shp_country, grid_country):
     coast_gdf = gpd.GeoDataFrame(geometry=coastline, crs=grid_country.crs)
     grid_line = gpd.overlay(coast_gdf, grid_country, how="intersection")
 
-    # NOTE: EPSG:6933 was proposed here as a "global" replacement, but it is an
-    # equal-AREA projection and does not preserve length: its east-west scale
-    # error runs from -13% at the equator to +51% at 55N. Measured against a
-    # local UTM zone, EPSG:25394 reproduces Antigua's coastline to 0.3% while
-    # EPSG:6933 is off by 9%. Keep 25394 until this is replaced by a per-country
-    # UTM or a geodesic length, which is the only correct global fix.
-    grid_line["coast_length_meters"] = grid_line.to_crs(epsg=25394).length
+    # Geodesic length on the WGS84 ellipsoid. Any projected CRS is only valid
+    # near its own zone: a single local projection returns lengths that are
+    # wrong by orders of magnitude far from it, up to infinite, and an
+    # equal-area CRS such as EPSG:6933 does not preserve length at all (its
+    # east-west scale error runs from -13% at the equator to +51% at 55N).
+    # Geod measures on the ellipsoid directly and is correct at any latitude.
+    grid_line["coast_length_meters"] = grid_line.geometry.map(_geodesic_length)
 
     merged = grid_country[["id"]].merge(grid_line[["id", "coast_length_meters"]], on="id", how="left").fillna(0)
     merged["with_coast"] = (merged["coast_length_meters"] > 0).astype(int)
