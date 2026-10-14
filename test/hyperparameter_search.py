@@ -75,6 +75,7 @@ except ImportError:  # scikit-learn < 0.24
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import FEATURES, HYPERPARAMETERS_PATH, INPUT_DIR
+from src.models.train import load_training_dataset
 from src.models.two_stage_xgb import TwoStageXGBoost
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
@@ -180,15 +181,17 @@ def load_dataset(input_path):
     people affected, the event reported subnationally, and not every GID_1 in
     the country flagged as affected (which carries no spatial information).
     """
-    df = pd.read_parquet(input_path).drop_duplicates().reset_index(drop=True)
+    # Same pruned, dictionary-encoded read the training path uses: the full
+    # frame does not fit in memory at global coverage.
+    df = load_training_dataset(input_path).drop_duplicates().reset_index(drop=True)
 
     c1 = df[df["Total Affected"] > 100]["DisNo."].unique()
     c2 = df[df["level"] != "ADM0"]["DisNo."].unique()
     proportions = (
         df[df["level"] != "ADM0"]
         .assign(is_affected=lambda x: x["Total Affected"] > 0)
-        .groupby(["DisNo.", "GID_0", "GID_1"])["is_affected"].max()
-        .groupby(["DisNo.", "GID_0"]).mean()
+        .groupby(["DisNo.", "GID_0", "GID_1"], observed=True)["is_affected"].max()
+        .groupby(["DisNo.", "GID_0"], observed=True).mean()
         .reset_index(name="proportion_affected_gid1")
     )
     c3 = proportions[proportions.proportion_affected_gid1 < 1]["DisNo."].unique()
@@ -201,7 +204,7 @@ def load_dataset(input_path):
             "the grouping unit is the physical cyclone: every row needs a non-null "
             "'sid' (IBTrACS storm id) -- see the EM-DAT input schema in the README"
         )
-    multi = df.groupby("DisNo.")["sid"].nunique()
+    multi = df.groupby("DisNo.", observed=True)["sid"].nunique()
     if (multi > 1).any():
         raise ValueError(
             f"these DisNo. map to more than one sid and must be resolved first: "
@@ -229,7 +232,7 @@ def event_severity_labels(df, target_name=TARGET_NAME):
         if x == 0:
             return 0
         return 1 if x < IMPACT_THRESHOLD_HIGH else 2
-    return df.groupby("sid")[target_name].max().apply(categorize)
+    return df.groupby("sid", observed=True)[target_name].max().apply(categorize)
 
 
 def split_events(df, severity, n_events, test_fraction, random_state=RANDOM_STATE):
@@ -285,7 +288,7 @@ def evaluate_predictions(df_pred, target_name=TARGET_NAME, return_grouped=False)
     df = df.drop_duplicates(subset=["DisNo.", "id"])
 
     grouped = (
-        df.groupby(["DisNo.", "GID_0", "GID_1"])
+        df.groupby(["DisNo.", "GID_0", "GID_1"], observed=True)
         .agg(prediction_ppl=("prediction_ppl", "sum"),
              actual_perc=(target_name, "max"),
              population=("population", "sum"))
