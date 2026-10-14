@@ -120,7 +120,8 @@ def prepare_data(aggregate_to_adm1=False):
     return df.drop_duplicates()
 
 
-def execute_training_run(model_name, strategy, aggregate_to_adm1=False, event_col="DisNo."):
+def execute_training_run(model_name, strategy, aggregate_to_adm1=False,
+                         event_col="DisNo.", recompute=False):
     """Orchestrates the data prep and LOOCV execution for a specific model and strategy.
 
     `event_col` is the LOOCV grouping unit: "DisNo." (the paper's country-event
@@ -131,6 +132,7 @@ def execute_training_run(model_name, strategy, aggregate_to_adm1=False, event_co
     logger.info(f"Strategy: {strategy}")
     logger.info(f"Level: {'ADM1' if aggregate_to_adm1 else 'Grid'}")
     logger.info(f"LOOCV unit: {event_col}")
+    logger.info(f"Recompute existing predictions: {recompute}")
 
     df = prepare_data(aggregate_to_adm1=aggregate_to_adm1)
 
@@ -184,6 +186,7 @@ def execute_training_run(model_name, strategy, aggregate_to_adm1=False, event_co
         strategy=strategy,
         output_folder=output_folder,
         event_col=event_col,
+        recompute=recompute,
     )
 
 
