@@ -44,6 +44,11 @@ def main():
                         help="Train the 2-stage XGBoost model")
     parser.add_argument("--run-interpretability", action="store_true",
                         help="Run SHAP analysis on trained models")
+    parser.add_argument("--recompute", action="store_true",
+                        help="Overwrite existing per-event predictions instead of "
+                             "reusing them. Required after changing the model or its "
+                             "hyperparameters, otherwise every event is skipped and "
+                             "the previous predictions are kept")
 
     # Selective Stage (for debugging)
     parser.add_argument("--stage", type=str,
@@ -112,7 +117,8 @@ def main():
     # --- OPTIONAL SCIENCE ---
     if args.run_models:
         logging.info("Science: Running 2-Stage XGBoost Model...")
-        execute_training_run("2-stage-XGBoost", strategy="global", aggregate_to_adm1=True)
+        execute_training_run("2-stage-XGBoost", strategy="global",
+                             aggregate_to_adm1=True, recompute=args.recompute)
 
     if args.run_interpretability:
         logging.info("Science: Running SHAP Analysis...")

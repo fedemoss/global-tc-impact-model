@@ -20,7 +20,7 @@ def _save_final_model(model, out_dir):
 
 
 def run_loocv_pipeline(df, events, model, strategy="global", output_folder="loocv_results",
-                       event_col="DisNo."):
+                       event_col="DisNo.", recompute=False):
     """
     Executes LOOCV strategies based exactly on the original paper parameters.
 
@@ -52,8 +52,11 @@ def run_loocv_pipeline(df, events, model, strategy="global", output_folder="looc
     for ev in events:
         out_file = out_dir / f"predictions_event_{ev}.csv"
         
-        # Skip if already processed
-        if out_file.exists():
+        # Existing predictions are reused by default, which makes an interrupted
+        # run resumable. Pass recompute=True after changing the model or its
+        # hyperparameters, or every event is skipped and the previous
+        # predictions are silently kept.
+        if out_file.exists() and not recompute:
             logger.info(f"Skipping event {ev}: file already exists.")
             continue
 
