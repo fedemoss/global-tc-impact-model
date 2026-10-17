@@ -1,97 +1,119 @@
-import pandas as pd
+"""Reference baselines the model is compared against.
+
+All three are deterministic rules, not fitted models: the comparison in the
+paper is against what a practitioner could compute from a wind field and a
+record of past events, with no training involved.
+
+* ``windspeed-exposed``    everyone in a cell is affected once the wind exceeds
+                           the threshold.
+* ``historical``           the country's median past impact percentage, applied
+                           regardless of this storm's wind.
+* ``windspeed-historical``  that same median, but only where the wind exceeds
+                           the threshold.
+
+Each exposes the ``train_and_predict(df_train, df_test)`` interface the LOOCV
+pipeline calls, so they run through the same evaluation path as the model. Only
+the historical median actually consults ``df_train``; the wind rule ignores it.
+"""
+import logging
+
 import numpy as np
-from xgboost import XGBRegressor
+import pandas as pd
 
-# ---------------------------------------------------------
-# 1. Historical Model (Median-based)
-# ---------------------------------------------------------
-class HistoricalModel:
+logger = logging.getLogger(__name__)
+
+TARGET_NAME = "perc_affected_pop_grid_region"
+
+# Sustained wind above which the exposed-population rules consider a cell hit.
+# 33 m/s is the Saffir-Simpson category 1 threshold.
+WIND_THRESHOLD = 33.0
+
+
+def country_median_past_impact(df, target_name=TARGET_NAME):
+    """Per (country, event): median non-zero impact % of that country's other events.
+
+    Only events with a recorded impact enter the median; a country whose other
+    events were all zero gets 0. The comparison is ``year <= year``, so an event
+    can see others from its own year. That is a mild look-ahead, kept because it
+    is how the published baseline was computed -- flagged here rather than
+    silently changed, since correcting it would move the reported numbers.
     """
-    'historical' baseline: predicts the median of past impact data based on the region.
-    Does not use machine learning; relies purely on historical statistical medians.
-    """
-    def __init__(self, region_col="iso3", target_name="perc_affected_pop_grid_region"):
-        self.region_col = region_col
+    country_events = (
+        df.groupby(["GID_0", "DisNo.", "year"], observed=True)[target_name]
+        .apply(lambda x: x.unique())
+        .reset_index()
+    )
+    country_events["impact_percent"] = country_events[target_name].apply(
+        lambda arr: [v for v in arr if v != 0])
+    country_events = country_events.drop(columns=target_name)
+
+    rows = []
+    for _, row in country_events.iterrows():
+        past = country_events[
+            (country_events["GID_0"] == row["GID_0"])
+            & (country_events["year"] <= row["year"])
+            & (country_events["DisNo."] != row["DisNo."])
+        ]
+        impacts = [v for sub in past["impact_percent"] for v in sub]
+        rows.append((row["GID_0"], row["DisNo."], np.median(impacts) if impacts else 0.0))
+
+    return pd.DataFrame(rows, columns=["GID_0", "DisNo.", "median_pct"])
+
+
+class _Baseline:
+    """Shared plumbing: predictions are a percentage of each cell's population."""
+
+    name = "baseline"
+
+    def __init__(self, target_name=TARGET_NAME, wind_threshold=WIND_THRESHOLD):
         self.target_name = target_name
-        self.regional_medians = None
-        self.global_median = 0
-        
-    def fit(self, X, y=None):
-        target = y if y is not None else X[self.target_name]
-        df = X.copy()
-        df[self.target_name] = target
-        
-        # Calculate median past impact per region
-        self.regional_medians = df.groupby(self.region_col)[self.target_name].median().reset_index()
-        self.regional_medians.rename(columns={self.target_name: "regional_median_pred"}, inplace=True)
-        
-        # Fallback global median for completely unseen regions
-        self.global_median = df[self.target_name].median()
-        return self
-        
-    def predict(self, X):
-        df = X.copy()
-        df = df.merge(self.regional_medians, on=self.region_col, how="left")
-        
-        # Fill regions with no past data with the global median
-        preds = df["regional_median_pred"].fillna(self.global_median).values
-        return preds
-        
+        self.wind_threshold = wind_threshold
+
+    def _predict_percent(self, df_train, df_test):
+        raise NotImplementedError
+
     def train_and_predict(self, df_train, df_test):
-        self.fit(df_train)
         df_result = df_test.copy()
-        df_result["prediction_perc"] = self.predict(df_test)
-        df_result["prediction_perc"] = df_result["prediction_perc"].clip(lower=0)
+        df_result["prediction_perc"] = (
+            self._predict_percent(df_train, df_test).clip(lower=0, upper=100))
         return df_result
 
 
-# ---------------------------------------------------------
-# Base ML Class for the other two baselines
-# ---------------------------------------------------------
-class BaseXGBBaseline:
-    """Parent class for ML-based baselines to ensure a consistent API."""
-    def __init__(self, features, target_name="perc_affected_pop_grid_region", **kwargs):
-        self.features = features
-        self.target_name = target_name
-        self.model = XGBRegressor(
-            booster="gbtree", 
-            n_estimators=100, 
-            learning_rate=0.01,
-            max_depth=4,
-            random_state=42,
-            verbosity=0,
-            **kwargs
-        )
-        
-    def fit(self, X, y=None):
-        target = y if y is not None else X[self.target_name]
-        self.model.fit(X[self.features], target)
-        return self
-        
-    def predict(self, X):
-        return self.model.predict(X[self.features])
-        
-    def train_and_predict(self, df_train, df_test):
-        self.fit(df_train)
-        df_result = df_test.copy()
-        df_result["prediction_perc"] = self.predict(df_test)
-        df_result["prediction_perc"] = df_result["prediction_perc"].clip(lower=0)
-        return df_result
+class WindspeedExposedModel(_Baseline):
+    """Everyone in the cell is affected when the wind exceeds the threshold."""
+
+    name = "windspeed-exposed"
+
+    def _predict_percent(self, df_train, df_test):
+        hit = (df_test["wind_speed"] > self.wind_threshold).astype(float)
+        return 100.0 * hit
 
 
-# ---------------------------------------------------------
-# 2. Windspeed Exposed Model
-# ---------------------------------------------------------
-class WindspeedExposedModel(BaseXGBBaseline):
-    """'windspeed-exposed' baseline: Relies purely on wind speed and population exposure."""
-    def __init__(self, target_name="perc_affected_pop_grid_region"):
-        super().__init__(features=["wind_speed", "population"], target_name=target_name)
+class HistoricalModel(_Baseline):
+    """The country's median past impact %, applied regardless of this storm's wind."""
+
+    name = "historical"
+
+    def _median_for(self, df_train, df_test):
+        # The median is computed over the training events only, which under
+        # LOOCV is every event except the one being predicted.
+        medians = country_median_past_impact(df_train, self.target_name)
+        per_country = (medians.groupby("GID_0", observed=True)["median_pct"]
+                       .median().rename("country_median"))
+        out = df_test[["GID_0"]].merge(
+            per_country, left_on="GID_0", right_index=True, how="left")
+        return out["country_median"].fillna(0.0).to_numpy()
+
+    def _predict_percent(self, df_train, df_test):
+        return pd.Series(self._median_for(df_train, df_test), index=df_test.index)
 
 
-# ---------------------------------------------------------
-# 3. Windspeed Historical Model
-# ---------------------------------------------------------
-class WindspeedHistoricalModel(BaseXGBBaseline):
-    """'windspeed-historical' baseline: Combines wind speed exposure and historical impacts."""
-    def __init__(self, target_name="perc_affected_pop_grid_region"):
-        super().__init__(features=["wind_speed", "population", "N_events_5_years"], target_name=target_name)
+class WindspeedHistoricalModel(HistoricalModel):
+    """The historical median, applied only where the wind exceeds the threshold."""
+
+    name = "windspeed-historical"
+
+    def _predict_percent(self, df_train, df_test):
+        median = pd.Series(self._median_for(df_train, df_test), index=df_test.index)
+        hit = (df_test["wind_speed"] > self.wind_threshold).astype(float)
+        return median * hit
