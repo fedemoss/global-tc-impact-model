@@ -4,7 +4,8 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from src.config import INPUT_DIR, FEATURES
+from src.config import INPUT_DIR, OUTPUT_DIR, FEATURES
+from src.evaluation.aggregation import aggregate_output_folder
 from src.evaluation.cv_strategies import run_loocv_pipeline
 from src.models.baselines import (
     HistoricalModel,
@@ -188,6 +189,15 @@ def execute_training_run(model_name, strategy, aggregate_to_adm1=False,
         event_col=event_col,
         recompute=recompute,
     )
+
+    # Impact is reported per administrative unit, so a grid-level run is
+    # aggregated to ADM1 for evaluation and for comparison against the
+    # baselines. A run already at ADM1 needs no conversion.
+    if not aggregate_to_adm1:
+        adm1_folder = output_folder.replace(f"_{level_str}", "_adm1", 1)
+        n = aggregate_output_folder(OUTPUT_DIR / output_folder,
+                                    OUTPUT_DIR / adm1_folder)
+        logger.info(f"ADM1 predictions for evaluation: {n} events -> {adm1_folder}")
 
 
 if __name__ == "__main__":
