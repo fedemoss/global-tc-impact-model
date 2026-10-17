@@ -75,6 +75,8 @@ except ImportError:  # scikit-learn < 0.24
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import FEATURES, HYPERPARAMETERS_PATH, INPUT_DIR
+from src.evaluation.aggregation import (
+    aggregate_predictions_to_adm1, categorise)
 from src.models.train import load_training_dataset
 from src.models.two_stage_xgb import TwoStageXGBoost
 
@@ -281,23 +283,9 @@ def evaluate_predictions(df_pred, target_name=TARGET_NAME, return_grouped=False)
     and turned back into a percentage of that unit's population before being
     binned. Both the "affected at all" and "high impact" thresholds are scored.
     """
-    df = df_pred.copy()
-    df["prediction_perc"] = df["prediction_perc"].clip(lower=0, upper=100)
-    df["prediction_ppl"] = df["prediction_perc"] * df["population"] / 100
-    df["actual_ppl"] = df[target_name] * df["population"] / 100
-    df = df.drop_duplicates(subset=["DisNo.", "id"])
-
-    grouped = (
-        df.groupby(["DisNo.", "GID_0", "GID_1"], observed=True)
-        .agg(prediction_ppl=("prediction_ppl", "sum"),
-             actual_perc=(target_name, "max"),
-             population=("population", "sum"))
-        .reset_index()
-    )
-    grouped = grouped[grouped["population"] > 0]
-    grouped["reported"] = grouped["actual_perc"].clip(upper=100)
-    grouped["predicted"] = (100 * grouped["prediction_ppl"] / grouped["population"]).clip(upper=100)
-    grouped = grouped.dropna(subset=["reported", "predicted"])
+    # Shared with the post-training evaluation, so the metric a configuration
+    # is selected on is computed exactly as the reported one.
+    grouped = aggregate_predictions_to_adm1(df_pred, target_name=target_name)
 
     if grouped.empty:
         empty = {"mae": float("nan"), "n_adm1": 0}
@@ -305,9 +293,8 @@ def evaluate_predictions(df_pred, target_name=TARGET_NAME, return_grouped=False)
             empty.update({f"precision{suffix}": 0.0, f"recall{suffix}": 0.0, f"f1{suffix}": 0.0})
         return (empty, grouped) if return_grouped else empty
 
-    bins = [-np.inf, IMPACT_THRESHOLD_LOW, IMPACT_THRESHOLD_HIGH, np.inf]
-    grouped["reported_cat"] = pd.cut(grouped["reported"], bins=bins, labels=[0, 1, 2]).astype(int)
-    grouped["predicted_cat"] = pd.cut(grouped["predicted"], bins=bins, labels=[0, 1, 2]).astype(int)
+    grouped["reported_cat"] = categorise(grouped["reported"])
+    grouped["predicted_cat"] = categorise(grouped["predicted"])
 
     metrics = {
         "mae": mean_absolute_error(grouped["reported"], grouped["predicted"]),

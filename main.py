@@ -44,6 +44,9 @@ def main():
                         help="Train the 2-stage XGBoost model")
     parser.add_argument("--run-interpretability", action="store_true",
                         help="Run SHAP analysis on trained models")
+    parser.add_argument("--with-baselines", action="store_true",
+                        help="Also run the three reference baselines, so the "
+                             "evaluation can compare against them")
     parser.add_argument("--recompute", action="store_true",
                         help="Overwrite existing per-event predictions instead of "
                              "reusing them. Required after changing the model or its "
@@ -116,9 +119,17 @@ def main():
 
     # --- OPTIONAL SCIENCE ---
     if args.run_models:
-        logging.info("Science: Running 2-Stage XGBoost Model...")
-        execute_training_run("2-stage-XGBoost", strategy="global",
-                             aggregate_to_adm1=True, recompute=args.recompute)
+        # Fitted on grid cells, matching the hyperparameter search; predictions
+        # are aggregated to ADM1 afterwards, which is the level EM-DAT reports
+        # at and the level the baselines are compared on.
+        models = ["2-stage-XGBoost"]
+        if args.with_baselines:
+            models += ["historical", "windspeed-exposed", "windspeed-historical"]
+        for name in models:
+            logging.info(f"Science: Running {name}...")
+            execute_training_run(name, strategy="global",
+                                 aggregate_to_adm1=False,
+                                 recompute=args.recompute)
 
     if args.run_interpretability:
         logging.info("Science: Running SHAP Analysis...")
