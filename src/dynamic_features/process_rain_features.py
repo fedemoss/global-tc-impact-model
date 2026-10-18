@@ -11,6 +11,7 @@ import rasterio
 from rasterio.transform import rowcol
 from rasterstats import zonal_stats
 
+from src.dynamic_features.process_wind_features import covers_storms
 from src.utils.geo_utils import adjust_longitude
 
 from src.config import (
@@ -305,11 +306,15 @@ def process_country_rainfall(iso3, metadata_global, grid_global, out_dir, produc
     not_working_cases = []
     
     out_file = out_dir / f"rainfall_data_{iso3}.csv"
-    if out_file.exists():
-        logger.info(f"Skipping {iso3}: file already exists")
-        return
-
     metadata_country = metadata_global[metadata_global.iso3 == iso3]
+    expected = set(metadata_country["sid"].astype(str))
+    if covers_storms(out_file, expected):
+        logger.info(f"Skipping {iso3}: rainfall already covers its {len(expected)} storms")
+        return
+    if out_file.exists():
+        logger.info(f"{iso3}: existing rainfall does not cover the current "
+                    f"storm set ({len(expected)} storms); recomputing")
+
     if not metadata_country.empty:
         with ThreadPoolExecutor(max_workers=10) as executor:
             args_list = [

@@ -164,3 +164,6 @@ download_srtm_tiles_old.py
 
 # Local Overleaf clone living alongside this repo on some machines -- never part of the model release
 /paper/
+
+# Local test suite for the pipeline internals -- kept on disk, not part of the release
+/tests/

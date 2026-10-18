@@ -84,9 +84,8 @@ def _ensure_split_by_iso3(path, key="iso3", rename=None):
     """Split a global CSV into one CSV per country, once, streaming by chunk."""
     out_dir = _split_dir(path)
     marker = out_dir / "_complete"
-    # The split is a cache of `path`. Rebuild it whenever the source has been
-    # regenerated, otherwise a re-run of an upstream stage leaves the pipeline
-    # reading the previous version's columns and rows.
+    # The split is a cache of `path` and is rebuilt whenever the source is
+    # newer, so that a re-run of an upstream stage is picked up here.
     if marker.exists():
         if marker.stat().st_mtime >= Path(path).stat().st_mtime:
             return out_dir
@@ -211,11 +210,11 @@ def build_country_dataset(iso3, df_impact_country,
     wind_path = OUTPUT_DIR / "IBTRACS" / "standard" / f"windfield_data_{iso3}.csv"
     if not wind_path.exists(): return None
     df_wind = pd.read_csv(wind_path).rename(columns={"grid_point_id": "id", "GID_0": "iso3"})
-    # The wind field is a property of the cyclone track, so there is one value
-    # per (sid, cell). The collector iterates over the EM-DAT metadata, which
-    # has a row per country-event, so a cyclone with two EM-DAT records in one
-    # country is written twice: PHL alone carries 7,548 duplicate rows, which
-    # the impact join then squares into 15,096 duplicate event-cells.
+    # The wind field is a property of the cyclone track: one value per
+    # (sid, cell). The collector iterates the EM-DAT metadata, which holds a
+    # row per country-event, so a cyclone with two records in one country is
+    # written once per record. Collapsing them here keeps the impact join from
+    # pairing each copy with each record.
     n_dup_wind = int(df_wind.duplicated(subset=["sid", "id"]).sum())
     if n_dup_wind:
         logging.warning(
@@ -275,12 +274,10 @@ def build_country_dataset(iso3, df_impact_country,
         # country's DisNo. to every cell and multiplies the row count by the
         # number of countries the cyclone crossed.
         #
-        # Join on the grid cell itself. The impact table already carries a row
-        # per (event, cell), so (sid, id) is unique on both sides and the result
-        # is one row per event-cell. Joining on (sid, GID_1, GID_2) instead is
-        # many-to-many -- hundreds of cells share an administrative unit on each
-        # side -- and multiplies the row count by three to four orders of
-        # magnitude before anything can filter it.
+        # Join on the grid cell itself: the impact table carries a row per
+        # (event, cell), so the result is one row per event-cell. Joining on
+        # (sid, GID_1, GID_2) would be many-to-many, since hundreds of cells
+        # share an administrative unit on each side.
         df_dyn = df_dyn.merge(
             df_impact_country[["sid", "id", "DisNo.", "GID_0", "level",
                                "Total Affected", "perc_affected_pop_grid_region",
@@ -289,11 +286,10 @@ def build_country_dataset(iso3, df_impact_country,
             how="inner"
         )
 
-    # Each output row must be one country-event observed at one grid cell. The
-    # join is on sid, so a cyclone with two EM-DAT records legitimately yields
-    # two rows per cell -- one per event -- but a repeated (DisNo., id) means a
-    # key was non-unique and the row count has been multiplied. That is how it
-    # ran away by three orders of magnitude before.
+    # Each output row is one country-event observed at one grid cell. The join
+    # is on sid, so a cyclone with two EM-DAT records yields two rows per cell,
+    # one per event; a repeated (DisNo., id) instead means a key was not unique
+    # and the join has multiplied the row count.
     n_dup_out = int(df_dyn.duplicated(subset=["DisNo.", "id"]).sum())
     if n_dup_out:
         logging.error(
@@ -306,8 +302,9 @@ def build_country_dataset(iso3, df_impact_country,
     # 5. Merge Rainfall
     rain_path = OUTPUT_DIR / "PPS" / f"rainfall_data_{iso3}.csv"
     if rain_path.exists():
+        # Missing rainfall is left missing here; every fill happens in one
+        # place in compile_global_dataset, after the gaps have been counted.
         df_dyn = df_dyn.merge(pd.read_csv(rain_path), on=["id", "iso3", "sid"], how="left")
-        df_dyn["rainfall_max_24h"] = df_dyn["rainfall_max_24h"].fillna(0)
 
     # 6. Merge Historical Frequency
     hist_path = OUTPUT_DIR / "features" / "historical_events_feature.csv"
@@ -316,7 +313,6 @@ def build_country_dataset(iso3, df_impact_country,
         if df_hist is None:
             df_hist = pd.DataFrame(columns=["id", "iso3", "DisNo.", "N_events_5_years"])
         df_dyn = df_dyn.merge(df_hist, on=["id", "iso3", "DisNo."], how="left")
-        df_dyn["N_events_5_years"] = df_dyn["N_events_5_years"].fillna(0)
     else:
         # Silently skipping this merge is how N_events_5_years goes missing from
         # the training set without anything failing.
@@ -347,6 +343,44 @@ def build_country_dataset(iso3, df_impact_country,
 
     return df_final
 
+def _write_nan_report(nan_counts, row_counts, out_path, filled_with_zero):
+    """Record how many values were missing per feature before any filling.
+
+    Writes two files beside the dataset: a per-feature summary and a
+    per-country breakdown, so a feature that is fine globally but absent for
+    one country is still visible.
+    """
+    per_country = pd.DataFrame(nan_counts).fillna(0).astype("int64")  # feature x iso3
+    total_rows = int(sum(row_counts.values()))
+    summary = pd.DataFrame({
+        "nan_rows": per_country.sum(axis=1),
+        "total_rows": total_rows,
+    })
+    summary["pct_nan"] = 100 * summary["nan_rows"] / max(total_rows, 1)
+    summary["filled_with_zero"] = summary.index.isin(filled_with_zero)
+    countries_affected = (per_country > 0).sum(axis=1)
+    summary["countries_affected"] = countries_affected
+    summary = summary.sort_values("nan_rows", ascending=False)
+
+    summary.to_csv(out_path / "nan_report.csv")
+    per_country.T.to_csv(out_path / "nan_report_by_country.csv")
+
+    worst = summary[summary["nan_rows"] > 0]
+    if worst.empty:
+        logger.info(f"No missing values in any feature across {total_rows:,} rows")
+        return
+    logger.warning(
+        f"Missing values before filling, across {total_rows:,} rows "
+        f"({len(worst)} features affected) -> {out_path / 'nan_report.csv'}"
+    )
+    for feat, r in worst.head(25).iterrows():
+        flag = " [filled with 0]" if r["filled_with_zero"] else ""
+        logger.warning(
+            f"    {feat:<28} {int(r['nan_rows']):>12,} rows "
+            f"({r['pct_nan']:6.2f}%)  in {int(r['countries_affected'])} countries{flag}"
+        )
+
+
 def compile_global_dataset():
     """Compiles the master global training dataset."""
     meta_dir = OUTPUT_DIR / "IBTRACS" / "standard"
@@ -375,9 +409,14 @@ def compile_global_dataset():
     grid_global = gpd.read_file(grid_path) if grid_path.exists() else None
     adm_global = gpd.read_file(adm2_path) if adm2_path.exists() else None
 
+    # Every zero-fill happens here, after the gaps have been counted into
+    # nan_report.csv, so the extent of each fill is recorded alongside the
+    # dataset.
     fill_0 = ["mean_elev", "mean_slope", "mean_rug", "urban", "rural", "water",
               "storm_tide_rp_0010", "landslide_risk_sum", "flood_risk", "population",
-              "coast_length_meters"]
+              "coast_length_meters",
+              # a storm with no IMERG coverage, and a cell with no prior events
+              "rainfall_max_24h", "N_events_5_years"]
 
     out_path = INPUT_DIR / "model_input_dataset"
     out_path.mkdir(parents=True, exist_ok=True)
@@ -394,6 +433,7 @@ def compile_global_dataset():
     columns = set()
     shdi_chunks = []
     written = 0
+    nan_counts, row_counts = {}, {}
     for n, iso3 in enumerate(iso3_list, 1):
         df_impact_country = _load_country_layer(impact_path, iso3, usecols=impact_cols)
         df_country = build_country_dataset(
@@ -401,6 +441,13 @@ def compile_global_dataset():
             grid_global=grid_global, adm_global=adm_global)
         if df_country is None or df_country.empty:
             continue
+        # Count missing values before any filling. Once a gap has been filled it
+        # is indistinguishable from a real zero, and zero is a substantive claim
+        # for several of these features: no elevation reads as sea level, no
+        # population as an empty cell.
+        nan_counts[iso3] = df_country.isna().sum()
+        row_counts[iso3] = len(df_country)
+
         for col in fill_0:
             if col in df_country.columns:
                 df_country[col] = df_country[col].fillna(0)
@@ -411,6 +458,9 @@ def compile_global_dataset():
         written += 1
         logger.info(f"[{n}/{len(iso3_list)}] {iso3}: {len(df_country):,} rows")
         del df_country
+
+    if nan_counts:
+        _write_nan_report(nan_counts, row_counts, out_path, fill_0)
 
     if not written:
         shutil.rmtree(parts_dir)

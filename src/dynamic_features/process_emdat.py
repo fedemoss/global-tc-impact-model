@@ -83,18 +83,13 @@ def process_impact_geometries(gaul_shp, impact_data):
 
     return combined
 
-# SIDs present in the EM-DAT registry in a form IBTrACS does not carry, mapped
-# to the matching storm in IBTrACS.ALL.v04r01. Each was confirmed by name,
-# season and track bounds. Without the correction the wind step finds no track
-# for the event and the country produces no output.
-# EM-DAT carries an IBTrACS storm id per event, but a number of them do not
-# resolve: the embedded genesis day and position are off by a day or a degree
-# or two from what IBTrACS records, so the id names no storm at all. Each
-# correction below was obtained by matching the EM-DAT event name to IBTrACS
-# within a season, then confirming the candidate against the date and position
-# the broken id encodes; every target was then checked to fetch and to carry a
-# track consistent with the event. Together these recover 13 cyclones that the
-# pipeline silently dropped.
+# EM-DAT carries an IBTrACS storm id per event. Some of them encode a genesis
+# day or position that differs from the IBTrACS record by a day or a degree,
+# and so match no storm in IBTrACS.ALL.v04r01. Each entry below maps such an id
+# to the storm it denotes, identified by event name within the season and
+# confirmed against the date and position the id encodes and against the track
+# bounds of the candidate. Without the mapping the wind step finds no track for
+# the event.
 SID_CORRECTIONS = {
     # Seroja, April 2021 (IDN, TLS): registry longitude field reads 123, the
     # track runs 107.8-123.8E and IBTrACS records 122.
@@ -412,12 +407,12 @@ def calculate_grid_impact(iso3_filter=None):
         # perc_affected_pop_grid_region: (100 * Total Affected) / Total Regional Population
         perc = (100 * df_affected["Total Affected"]) / total_pop_reg
 
-        # The reported affected count can exceed the population of the units the
-        # event is matched to: EM-DAT reports people affected, which includes
-        # non-residents and double-counts those affected more than once, and a
-        # figure reported at one administrative level is attributed to whichever
-        # units could be matched. The target is a share of the resident
-        # population, so it is capped at 100% and the capping is recorded.
+        # The reported affected count can exceed the population of the units
+        # the event is matched to: EM-DAT counts people affected, including
+        # non-residents and repeat exposure, and a figure reported for the
+        # event is attributed to the units that could be geolocated. The target
+        # is a share of resident population, so it is capped at 100% and the
+        # capping recorded.
         df_affected["impact_capped"] = perc > 100
         df_affected["perc_affected_pop_grid_region"] = perc.clip(upper=100)
 
