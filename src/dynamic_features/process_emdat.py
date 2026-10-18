@@ -355,19 +355,31 @@ def calculate_grid_impact(iso3_filter=None):
         total_pop_reg = df_affected.drop_duplicates(subset=["id"])["population"].sum()
 
         # perc_affected_pop_grid_region: (100 * Total Affected) / Total Regional Population
-        df_affected["perc_affected_pop_grid_region"] = (
-            100 * df_affected["Total Affected"]
-        ) / total_pop_reg
+        perc = (100 * df_affected["Total Affected"]) / total_pop_reg
+
+        # The reported affected count can exceed the population of the units the
+        # event is matched to: EM-DAT reports people affected, which includes
+        # non-residents and double-counts those affected more than once, and a
+        # figure reported at one administrative level is attributed to whichever
+        # units could be matched. The target is a share of the resident
+        # population, so it is capped at 100% and the capping is recorded.
+        df_affected["impact_capped"] = perc > 100
+        df_affected["perc_affected_pop_grid_region"] = perc.clip(upper=100)
 
         # 5. Finalize and append
         # One percentage per cell. df_affected inherits df_merged's shape and so
         # may repeat an id; the percentage is constant within an id, so it is
         # deduplicated before the join to keep one row per (event, cell).
         df_final = df_merged.merge(
-            df_affected[["id", "perc_affected_pop_grid_region"]].drop_duplicates(subset=["id"]),
+            df_affected[["id", "perc_affected_pop_grid_region", "impact_capped"]]
+            .drop_duplicates(subset=["id"]),
             on="id",
             how="left"
         ).fillna({"perc_affected_pop_grid_region": 0})
+        # Cells outside the affected units have no row on the right of the join.
+        # eq(True) maps both those and the unflagged ones to False and keeps the
+        # column boolean, which fillna on an object column would not.
+        df_final["impact_capped"] = df_final["impact_capped"].eq(True)
 
         if stream_columns is None:
             stream_columns = list(df_final.columns)
