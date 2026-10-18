@@ -154,13 +154,11 @@ _ABSENT_FROM_IBTRACS = "not in IBTrACS"
 
 
 def ensure_ibtracs_available(sample_sid, attempts=3, backoff=10):
-    """Force CLIMADA to fetch the IBTrACS archive once, before any pool starts.
+    """Fetch the IBTrACS archive once, before any worker pool is created.
 
-    CLIMADA downloads IBTrACS.ALL.v04r01.nc lazily, on the first track request.
-    With a process pool every worker issues that first request at the same time,
-    and those arriving while the file is still being written fail with
-    "No such file or directory" or "NetCDF: HDF error". Fetching once in the
-    parent removes the race.
+    CLIMADA downloads IBTrACS.ALL.v04r01.nc on the first track request. Issuing
+    that request in the parent ensures the archive is complete on disk before
+    concurrent workers read it.
     """
     for n in range(attempts):
         try:
@@ -183,11 +181,9 @@ def ensure_ibtracs_available(sample_sid, attempts=3, backoff=10):
 def _fetch_track(sid, attempts=3, backoff=5):
     """Return (TCTracks, None) or (None, reason).
 
-    A storm that is absent from IBTrACS is a fact about the data and is final.
-    A missing or half-written archive file is a transient condition, and
-    treating the two alike is how whole cyclones were lost: the archive had not
-    finished downloading, every read raised, and each one was recorded as
-    "this storm does not exist".
+    A storm absent from IBTrACS is a property of the data and is final. An
+    unreadable archive is a transient condition and is retried, so that the two
+    are never conflated in the reported reason.
     """
     last = None
     for n in range(attempts):
@@ -290,21 +286,42 @@ def process_storm_tracks(tc_tracks):
         
     return tracks
 
+def covers_storms(path, expected_sids, column="sid"):
+    """True when `path` exists and already holds every expected storm id.
+
+    Existing output is reused only when it covers the storms currently
+    expected, so that a change upstream -- a corrected identifier, a new event
+    -- is picked up on the next run instead of being masked by the file left
+    by the previous one.
+    """
+    if not path.exists():
+        return False
+    try:
+        have = set(pd.read_csv(path, usecols=[column])[column].astype(str))
+    except (ValueError, OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
+        return False
+    return set(map(str, expected_sids)) <= have
+
+
 def process_single_country(iso3, out_dir, gdf_global, all_events_global, shp_global):
     """Processes a single country's windfield and metadata."""
     wind_file = out_dir / f"windfield_data_{iso3}.csv"
     meta_file = out_dir / f"metadata_{iso3}.csv"
-    if wind_file.exists() and meta_file.exists():
+    all_events = all_events_global[all_events_global.GID_0 == iso3]
+    expected = set(all_events["sid"].astype(str))
+    if covers_storms(wind_file, expected) and covers_storms(meta_file, expected):
         return None
+    if wind_file.exists() or meta_file.exists():
+        logger.info(f"{iso3}: existing wind output does not cover the current "
+                    f"storm set ({len(expected)} storms); recomputing")
 
     gdf = gdf_global[gdf_global.iso3 == iso3].copy().reset_index(drop=True)
     cent = Centroids.from_geodataframe(gdf)
-    all_events = all_events_global[all_events_global.GID_0 == iso3]
 
     tc_tracks, problematic = get_storm_tracks(all_events=all_events)
     if problematic:
-        # Written beside the wind field so a lost cyclone is visible in the
-        # output tree, not only in a log line from the run that dropped it.
+        # Written beside the wind field so that storms without a track are
+        # recorded in the output tree as well as in the run log.
         pd.DataFrame(problematic, columns=["sid", "reason"]).to_csv(
             out_dir / f"skipped_tracks_{iso3}.csv", index=False)
         transient = [s for s, r in problematic if "absent from IBTrACS" not in r]
@@ -383,7 +400,8 @@ def generate_all_wind_features(max_workers=5, iso3_filter=None):
     out_dir = OUTPUT_DIR / "IBTRACS" / "standard"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Download the archive before forking: see ensure_ibtracs_available.
+    # Fetch the archive before the pool is created; see
+    # ensure_ibtracs_available.
     if len(all_events_global):
         logger.info("Prefetching the IBTrACS archive...")
         ensure_ibtracs_available(all_events_global.sid.iloc[0])
