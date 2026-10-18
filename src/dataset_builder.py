@@ -211,6 +211,18 @@ def build_country_dataset(iso3, df_impact_country,
     wind_path = OUTPUT_DIR / "IBTRACS" / "standard" / f"windfield_data_{iso3}.csv"
     if not wind_path.exists(): return None
     df_wind = pd.read_csv(wind_path).rename(columns={"grid_point_id": "id", "GID_0": "iso3"})
+    # The wind field is a property of the cyclone track, so there is one value
+    # per (sid, cell). The collector iterates over the EM-DAT metadata, which
+    # has a row per country-event, so a cyclone with two EM-DAT records in one
+    # country is written twice: PHL alone carries 7,548 duplicate rows, which
+    # the impact join then squares into 15,096 duplicate event-cells.
+    n_dup_wind = int(df_wind.duplicated(subset=["sid", "id"]).sum())
+    if n_dup_wind:
+        logging.warning(
+            f"{iso3}: wind field has {n_dup_wind:,} duplicate (sid, id) rows of "
+            f"{len(df_wind):,}; keeping one per cyclone-cell"
+        )
+        df_wind = df_wind.drop_duplicates(subset=["sid", "id"])
 
     # 2. Load Grid-to-GID Mapping (Crucial for sub-national alignment)
     df_grid_map = load_grid_gid_mapping(iso3, grid_global=grid_global, adm_global=adm_global)

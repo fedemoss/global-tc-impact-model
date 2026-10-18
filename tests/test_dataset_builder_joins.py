@@ -144,6 +144,42 @@ class TestTwoEventsPerCyclone:
         assert len(impact.drop_duplicates(subset=["DisNo.", "id"])) == 3
 
 
+class TestWindFieldDeduplication:
+    """The collector iterates EM-DAT records, so a cyclone with two records in
+    one country has its wind field written twice (observed: PHL, 7,548
+    byte-identical duplicate rows for 2006209N13130 and 2007257N16134)."""
+
+    def test_duplicate_wind_rows_square_the_impact_join(self):
+        wind = pd.DataFrame({
+            "sid": ["s1"] * 6,
+            "id": ["PHL_0", "PHL_1", "PHL_2"] * 2,   # the cyclone written twice
+            "wind_speed": [40.0, 55.0, 61.0] * 2,
+        })
+        impact = pd.concat([
+            _impact_slice("PHL", "2006-0410-PHL"),
+            _impact_slice("PHL", "2006-0415-PHL"),
+        ], ignore_index=True).assign(sid="s1")
+
+        joined = wind.merge(
+            impact[["sid", "id", "DisNo."]], on=["sid", "id"], how="inner")
+        assert len(joined) == 12          # 3 cells x 2 records x 2 copies
+        assert int(joined.duplicated(subset=["DisNo.", "id"]).sum()) == 6
+
+        deduped = wind.drop_duplicates(subset=["sid", "id"]).merge(
+            impact[["sid", "id", "DisNo."]], on=["sid", "id"], how="inner")
+        assert len(deduped) == 6          # 3 cells x 2 records
+        assert not deduped.duplicated(subset=["DisNo.", "id"]).any()
+        assert deduped["DisNo."].nunique() == 2
+
+    def test_dedup_keeps_the_wind_values(self):
+        wind = pd.DataFrame({
+            "sid": ["s1"] * 4, "id": ["c0", "c1"] * 2,
+            "wind_speed": [40.0, 55.0] * 2,
+        })
+        out = wind.drop_duplicates(subset=["sid", "id"])
+        assert out["wind_speed"].tolist() == [40.0, 55.0]
+
+
 class TestImpactCap:
     @pytest.mark.parametrize("affected,pop,expected,flagged", [
         (1_000, 10_000, 10.0, False),     # ordinary
