@@ -87,6 +87,14 @@ def process_impact_geometries(gaul_shp, impact_data):
 # to the matching storm in IBTrACS.ALL.v04r01. Each was confirmed by name,
 # season and track bounds. Without the correction the wind step finds no track
 # for the event and the country produces no output.
+# EM-DAT carries an IBTrACS storm id per event, but a number of them do not
+# resolve: the embedded genesis day and position are off by a day or a degree
+# or two from what IBTrACS records, so the id names no storm at all. Each
+# correction below was obtained by matching the EM-DAT event name to IBTrACS
+# within a season, then confirming the candidate against the date and position
+# the broken id encodes; every target was then checked to fetch and to carry a
+# track consistent with the event. Together these recover 13 cyclones that the
+# pipeline silently dropped.
 SID_CORRECTIONS = {
     # Seroja, April 2021 (IDN, TLS): registry longitude field reads 123, the
     # track runs 107.8-123.8E and IBTrACS records 122.
@@ -94,6 +102,41 @@ SID_CORRECTIONS = {
     # Cempaka, November 2017 (IDN): registry day-of-year 325 and longitude 112;
     # IBTrACS carries 329 and 110. No storm uses the 2017325 prefix.
     "2017325S10112": "2017329S10110",
+    # Megi, August 2004 (TWN, CHN): longitude 141 vs 144.
+    "2004227N15141": "2004227N15144",
+    # Guba, November 2007 (PNG): latitude 11S vs 10S.
+    "2007317S11150": "2007317S10150",
+    # Oswald, January 2013 (AUS): day 018 vs 020, latitude 14S vs 16S.
+    "2013018S14138": "2013020S16137",
+    # Lam, February 2015 (AUS): day 045 vs 047, longitude 145 vs 142.
+    "2015045S12145": "2015047S12142",
+    # Megi, September 2016 (TWN, CHN): day 266 vs 265, longitude 144 vs 150.
+    "2016266N11144": "2016265N10150",
+    # Sarika, October 2016 (PHL, CHN, VNM): EM-DAT uses the PAGASA name Karen;
+    # IBTrACS records Sarika at latitude 12N, longitude 131.
+    "2016287N13130": "2016287N12131",
+    # Haima, October 2016 (PHL, CHN): EM-DAT uses the PAGASA name Lawin.
+    "2016288N07145": "2016288N06146",
+    # Penny, December 2018 (AUS): day 362 vs 363, longitude 147 vs 145.
+    "2018362S13147": "2018363S12145",
+    # Niran, February 2021 (AUS, NCL): latitude 16S vs 14S.
+    "2021058S16149": "2021058S14149",
+    # Ana, January 2022 (MDG, MOZ, MWI, ZWE): longitude 059 vs 060.
+    "2022020S13059": "2022020S13060",
+    # Batsirai, January 2022 (MDG, MUS): day 025 vs 024, latitude 11S vs 9S.
+    "2022025S11091": "2022024S09090",
+    # Emnati, February 2022 (MDG): the registry id encodes a mid-ocean genesis
+    # at 073E on day 047; IBTrACS has the storm forming at 103E on day 037 and
+    # tracking west to 41E, crossing Madagascar on 22 February.
+    "2022047S15073": "2022037S10103",
+}
+
+#: Storm ids that resolve but that CLIMADA cannot use. Kept separate from
+#: SID_CORRECTIONS because there is nothing to correct to.
+UNUSABLE_SIDS = {
+    # Merbok, November 2004 (VNM): IBTrACS has a single valid timestep, which
+    # CLIMADA discards ("only one valid timestep has been found").
+    "2004327N16125",
 }
 
 
@@ -152,6 +195,18 @@ def add_missing_sid(df_impact):
         df_impact["sid"] = df_impact["sid"].replace(applied)
         for old, new in applied.items():
             logging.info(f"Corrected SID {old} -> {new}")
+
+    unusable = df_impact["sid"].isin(UNUSABLE_SIDS)
+    if unusable.any():
+        logging.warning(
+            f"Dropping {int(unusable.sum())} row(s) for storms CLIMADA cannot "
+            f"use: {sorted(set(df_impact.loc[unusable, 'sid']))}"
+        )
+        df_impact = df_impact[~unusable]
+
+    still_bad = sorted(set(df_impact["sid"].dropna()) & set(SID_CORRECTIONS))
+    if still_bad:
+        logging.error(f"SIDs that should have been corrected remain: {still_bad}")
 
     return df_impact.dropna(subset="sid").reset_index(drop=True)
 
