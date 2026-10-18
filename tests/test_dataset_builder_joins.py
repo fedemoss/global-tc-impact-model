@@ -95,21 +95,53 @@ class TestDisNoAttribution:
         assert old["DisNo."].nunique() == 5
 
 
-class TestDuplicateDisNoGuard:
-    def test_two_disno_for_one_sid_does_not_duplicate_cells(self, caplog):
-        """Two EM-DAT records for one cyclone in one country must not duplicate."""
-        from src.dataset_builder import build_country_dataset  # noqa: F401
+class TestTwoEventsPerCyclone:
+    """EM-DAT records two disasters for one cyclone in one country (observed
+    for PHL 2006209N13130 and 2007257N16134, with different affected counts).
+    Both are real events and both must survive."""
 
-        a = _impact_slice("PHL", "2013-0433-PHL")
-        b = _impact_slice("PHL", "2013-0434-PHL")
+    def test_the_uniqueness_key_is_disno_not_sid(self):
+        a = _impact_slice("PHL", "2006-0410-PHL", total_affected=15_000, perc=46.48)
+        b = _impact_slice("PHL", "2006-0415-PHL", total_affected=476_027, perc=100.0)
         impact = pd.concat([a, b], ignore_index=True)
 
-        dup = impact.groupby("sid", observed=True)["DisNo."].nunique()
-        assert (dup > 1).any(), "fixture should trip the guard"
+        assert impact.duplicated(subset=["sid", "id"]).any(), (
+            "(sid, id) repeats across the two events -- it is not the key"
+        )
+        assert not impact.duplicated(subset=["DisNo.", "id"]).any(), (
+            "(DisNo., id) is the key and must be unique"
+        )
 
-        deduped = impact.drop_duplicates(subset=["sid", "id"])
-        assert len(deduped) == 3
-        assert deduped["DisNo."].nunique() == 1
+    def test_both_events_survive_the_join(self):
+        """Deduplicating on (sid, id) would discard the larger disaster."""
+        df_dyn = pd.DataFrame({
+            "sid": ["2013306N07162"] * 3,
+            "id": [f"PHL_{i}" for i in range(3)],
+            "wind_speed": [40.0, 55.0, 61.0],
+        })
+        impact = pd.concat([
+            _impact_slice("PHL", "2006-0410-PHL", total_affected=15_000, perc=46.48),
+            _impact_slice("PHL", "2006-0415-PHL", total_affected=476_027, perc=100.0),
+        ], ignore_index=True)
+
+        out = df_dyn.merge(
+            impact[["sid", "id", "DisNo.", "GID_0", "level", "Total Affected",
+                    "perc_affected_pop_grid_region", "impact_capped"]],
+            on=["sid", "id"], how="inner")
+
+        assert out["DisNo."].nunique() == 2
+        assert len(out) == 6  # 3 cells x 2 events
+        assert not out.duplicated(subset=["DisNo.", "id"]).any()
+        assert sorted(out["Total Affected"].unique()) == [15_000.0, 476_027.0]
+
+    def test_guard_collapses_only_true_repeats(self):
+        """A genuinely repeated (DisNo., id) is the thing worth collapsing."""
+        slice_ = _impact_slice("PHL", "2006-0410-PHL")
+        impact = pd.concat([slice_, slice_], ignore_index=True)
+
+        n_dup = int(impact.duplicated(subset=["DisNo.", "id"]).sum())
+        assert n_dup == 3
+        assert len(impact.drop_duplicates(subset=["DisNo.", "id"])) == 3
 
 
 class TestImpactCap:
