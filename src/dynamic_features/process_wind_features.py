@@ -223,13 +223,12 @@ def get_storm_tracks(all_events):
             logger.warning(f"Skipping sid={sid}: unusable track ({e})")
             problematic_sid.append((sid, f"unusable track ({e})"))
 
+    # Tracks are passed through at their native resolution; the temporal
+    # refinement is applied in process_storm_tracks, which interpolates every
+    # track variable together.
     tc_tracks = TCTracks()
     for track in sel_ibtracs:
-        tc_track = track.get_track()
-        tc_track.interp(
-            time=pd.date_range(tc_track.time.values[0], tc_track.time.values[-1], freq="30min")
-        )
-        tc_tracks.append(tc_track)
+        tc_tracks.append(track.get_track())
 
     return tc_tracks, problematic_sid
 
