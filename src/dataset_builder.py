@@ -84,8 +84,13 @@ def _ensure_split_by_iso3(path, key="iso3", rename=None):
     """Split a global CSV into one CSV per country, once, streaming by chunk."""
     out_dir = _split_dir(path)
     marker = out_dir / "_complete"
+    # The split is a cache of `path`. Rebuild it whenever the source has been
+    # regenerated, otherwise a re-run of an upstream stage leaves the pipeline
+    # reading the previous version's columns and rows.
     if marker.exists():
-        return out_dir
+        if marker.stat().st_mtime >= Path(path).stat().st_mtime:
+            return out_dir
+        logger.info(f"{Path(path).name} is newer than its country split; re-splitting")
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -192,14 +197,15 @@ def load_static_features(iso3):
     return df_static.drop(columns=["GID_1", "GID_2"], errors="ignore")
 
 
-def build_country_dataset(iso3, df_meta, df_impact_country,
+def build_country_dataset(iso3, df_impact_country,
                           grid_global=None, adm_global=None):
     """
     Core Logic: Maps grid-level hazard intensity to sub-national impact targets.
 
     `df_impact_country` holds only this country's rows of the grid-level impact
-    table. `grid_global` and `adm_global` are passed through to
-    load_grid_gid_mapping so the GeoPackages are read once per run.
+    table, and supplies both the target and the DisNo. event identifier.
+    `grid_global` and `adm_global` are passed through to load_grid_gid_mapping
+    so the GeoPackages are read once per run.
     """
     # 1. Load Wind Exposure (Grid level: 'id')
     wind_path = OUTPUT_DIR / "IBTRACS" / "standard" / f"windfield_data_{iso3}.csv"
@@ -218,18 +224,45 @@ def build_country_dataset(iso3, df_meta, df_impact_country,
     if df_impact_country is None or df_impact_country.empty:
         return None
     df_impact_country = df_impact_country.copy()
+    missing = {"DisNo.", "impact_capped"} - set(df_impact_country.columns)
+    if missing:
+        raise KeyError(
+            f"{iso3}: impact table is missing {sorted(missing)}. It predates the "
+            f"current schema -- re-run the dynamic stage to regenerate "
+            f"EMDAT/impact_data.csv."
+        )
     df_impact_country[["GID_1", "GID_2"]] = df_impact_country[["GID_1", "GID_2"]].astype(object)
 
+    # The impact table should hold one row per (event, cell). Anything else
+    # multiplies the join below instead of failing, so it is collapsed here and
+    # reported rather than left to inflate the row count silently.
+    n_dup = int(df_impact_country.duplicated(subset=["sid", "id"]).sum())
+    if n_dup:
+        logging.warning(
+            f"{iso3}: impact table has {n_dup:,} duplicate (sid, id) rows of "
+            f"{len(df_impact_country):,}; collapsing to one row per event-cell"
+        )
+        df_impact_country = df_impact_country.drop_duplicates(subset=["sid", "id"])
+
+    n_before_impact = len(df_dyn)
     is_national_level = (df_grid_map["GID_1"] == iso3).all()
     if is_national_level:
         # GID_1 doesn't resolve subnationally for this country (see load_grid_gid_mapping) —
         # every grid cell shares the same national impact figures for a given event.
         impact_by_event = df_impact_country.groupby("sid").agg({
-            "GID_0": "first", "level": "first",
-            "Total Affected": "max", "perc_affected_pop_grid_region": "max"
+            "DisNo.": "first", "GID_0": "first", "level": "first",
+            "Total Affected": "max", "perc_affected_pop_grid_region": "max",
+            "impact_capped": "max"
         }).reset_index()
         df_dyn = df_dyn.merge(impact_by_event, on="sid", how="inner")
     else:
+        # DisNo. is taken from the impact table, which holds only this country's
+        # rows and so names the country-event the cell actually belongs to. The
+        # IBTrACS metadata is global and carries one DisNo. per country a
+        # cyclone hit, so joining it on sid alone attaches every affected
+        # country's DisNo. to every cell and multiplies the row count by the
+        # number of countries the cyclone crossed.
+        #
         # Join on the grid cell itself. The impact table already carries a row
         # per (event, cell), so (sid, id) is unique on both sides and the result
         # is one row per event-cell. Joining on (sid, GID_1, GID_2) instead is
@@ -237,22 +270,30 @@ def build_country_dataset(iso3, df_meta, df_impact_country,
         # side -- and multiplies the row count by three to four orders of
         # magnitude before anything can filter it.
         df_dyn = df_dyn.merge(
-            df_impact_country[["sid", "id", "GID_0", "level", "Total Affected",
-                               "perc_affected_pop_grid_region"]],
+            df_impact_country[["sid", "id", "DisNo.", "GID_0", "level",
+                               "Total Affected", "perc_affected_pop_grid_region",
+                               "impact_capped"]],
             on=["sid", "id"],
             how="inner"
         )
 
+    # The impact join selects event-cells; it must never create them. Growth
+    # here means a key is non-unique on one side, which is how the row count
+    # ran away by three orders of magnitude before.
+    if len(df_dyn) > n_before_impact:
+        logging.error(
+            f"{iso3}: impact join grew the row count {n_before_impact:,} -> "
+            f"{len(df_dyn):,}; the join keys are not unique"
+        )
+
     if df_dyn.empty: return None
 
-    # 5. Merge Rainfall & Metadata
+    # 5. Merge Rainfall
     rain_path = OUTPUT_DIR / "PPS" / f"rainfall_data_{iso3}.csv"
     if rain_path.exists():
         df_dyn = df_dyn.merge(pd.read_csv(rain_path), on=["id", "iso3", "sid"], how="left")
         df_dyn["rainfall_max_24h"] = df_dyn["rainfall_max_24h"].fillna(0)
-        
-    df_dyn = df_dyn.merge(df_meta[["sid", "DisNo."]], on="sid", how="left")
-        
+
     # 6. Merge Historical Frequency
     hist_path = OUTPUT_DIR / "features" / "historical_events_feature.csv"
     if hist_path.exists():
@@ -295,9 +336,10 @@ def compile_global_dataset():
     """Compiles the master global training dataset."""
     meta_dir = OUTPUT_DIR / "IBTRACS" / "standard"
     meta_files = list(meta_dir.glob("metadata_*.csv"))
+    # Presence of the IBTrACS metadata is the signal that the collect stage ran.
+    # DisNo. itself comes from the impact table, which carries it per country.
     if not meta_files: return
-    df_meta = pd.concat([pd.read_csv(f) for f in meta_files], ignore_index=True)[["sid", "DisNo."]].drop_duplicates()
-        
+
     impact_path = OUTPUT_DIR / "EMDAT" / "impact_data.csv"
     if not impact_path.exists(): return
 
@@ -307,8 +349,9 @@ def compile_global_dataset():
     _ensure_split_by_iso3(impact_path)
     # Columns the per-country merges consume. `id` is the grid cell and is the
     # key the impact join uses; the rest are carried through to the output.
-    impact_cols = ["sid", "id", "GID_0", "GID_1", "GID_2", "iso3", "level",
-                   "Total Affected", "perc_affected_pop_grid_region"]
+    impact_cols = ["sid", "id", "DisNo.", "GID_0", "GID_1", "GID_2", "iso3",
+                   "level", "Total Affected", "perc_affected_pop_grid_region",
+                   "impact_capped"]
 
     # Read the two GeoPackages once and reuse them for every country, rather
     # than re-reading the global grid inside load_grid_gid_mapping each time.
@@ -339,7 +382,7 @@ def compile_global_dataset():
     for n, iso3 in enumerate(iso3_list, 1):
         df_impact_country = _load_country_layer(impact_path, iso3, usecols=impact_cols)
         df_country = build_country_dataset(
-            iso3, df_meta, df_impact_country,
+            iso3, df_impact_country,
             grid_global=grid_global, adm_global=adm_global)
         if df_country is None or df_country.empty:
             continue

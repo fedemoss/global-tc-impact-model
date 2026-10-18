@@ -42,6 +42,9 @@ def _attach_event_date(df):
 _TRAINING_COLUMNS = sorted(set(FEATURES) | {
     "DisNo.", "GID_0", "GID_1", "GID_2", "id", "iso3", "level", "sid", "year",
     "Total Affected", "perc_affected_pop_grid_region",
+    # Diagnostic, not a predictor: marks cells whose reported impact exceeded
+    # the population it was attributed to and was therefore capped at 100%.
+    "impact_capped",
 })
 
 
