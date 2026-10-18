@@ -1,5 +1,6 @@
 import logging
 import multiprocessing as mp
+import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import geopandas as gpd
@@ -148,23 +149,83 @@ def create_metadata(tracks, all_events, shp, iso3):
         on=["GID_0", "sid"], how="left",
     )
 
+#: CLIMADA's wording when a storm id genuinely is not in the archive.
+_ABSENT_FROM_IBTRACS = "not in IBTrACS"
+
+
+def ensure_ibtracs_available(sample_sid, attempts=3, backoff=10):
+    """Force CLIMADA to fetch the IBTrACS archive once, before any pool starts.
+
+    CLIMADA downloads IBTrACS.ALL.v04r01.nc lazily, on the first track request.
+    With a process pool every worker issues that first request at the same time,
+    and those arriving while the file is still being written fail with
+    "No such file or directory" or "NetCDF: HDF error". Fetching once in the
+    parent removes the race.
+    """
+    for n in range(attempts):
+        try:
+            TCTracks.from_ibtracs_netcdf(storm_id=sample_sid)
+            return True
+        except ValueError as e:
+            if _ABSENT_FROM_IBTRACS in str(e):
+                return True  # archive readable; this particular id is unknown
+            logger.warning(f"IBTrACS prefetch attempt {n + 1} failed: {e}")
+        except Exception as e:
+            logger.warning(f"IBTrACS prefetch attempt {n + 1} failed: {e}")
+        if n + 1 < attempts:
+            time.sleep(backoff * (n + 1))
+    logger.error(
+        "Could not fetch the IBTrACS archive; every wind field will be empty."
+    )
+    return False
+
+
+def _fetch_track(sid, attempts=3, backoff=5):
+    """Return (TCTracks, None) or (None, reason).
+
+    A storm that is absent from IBTrACS is a fact about the data and is final.
+    A missing or half-written archive file is a transient condition, and
+    treating the two alike is how whole cyclones were lost: the archive had not
+    finished downloading, every read raised, and each one was recorded as
+    "this storm does not exist".
+    """
+    last = None
+    for n in range(attempts):
+        try:
+            return TCTracks.from_ibtracs_netcdf(storm_id=sid), None
+        except ValueError as e:
+            if _ABSENT_FROM_IBTRACS in str(e):
+                return None, f"absent from IBTrACS ({e})"
+            last = e
+        except (OSError, RuntimeError) as e:
+            last = e  # missing or partially written netCDF, HDF read error
+        except Exception as e:
+            last = e
+        if n + 1 < attempts:
+            time.sleep(backoff * (n + 1))
+    return None, f"unreadable after {attempts} attempts ({last})"
+
+
 def get_storm_tracks(all_events):
     """Fetch IBTrACS tracks for all events. Wind convention is handled by CLIMADA."""
     sel_ibtracs = []
     problematic_sid = []
 
     for sid in all_events.sid:
+        t, reason = _fetch_track(sid)
+        if t is None:
+            logger.warning(f"Skipping sid={sid}: {reason}")
+            problematic_sid.append((sid, reason))
+            continue
         try:
-            t = TCTracks.from_ibtracs_netcdf(storm_id=sid)
-            t.get_track().sid  # raises if empty
             track = t.get_track()
-            if len(track.time) == 0:
-                problematic_sid.append(sid)
+            if not isinstance(track, list) and len(track.time) == 0:
+                problematic_sid.append((sid, "track has no timesteps"))
                 continue
             sel_ibtracs.append(t)
         except Exception as e:
-            logger.warning(f"Skipping sid={sid}: {e}")
-            problematic_sid.append(sid)
+            logger.warning(f"Skipping sid={sid}: unusable track ({e})")
+            problematic_sid.append((sid, f"unusable track ({e})"))
 
     tc_tracks = TCTracks()
     for track in sel_ibtracs:
@@ -240,7 +301,18 @@ def process_single_country(iso3, out_dir, gdf_global, all_events_global, shp_glo
     cent = Centroids.from_geodataframe(gdf)
     all_events = all_events_global[all_events_global.GID_0 == iso3]
 
-    tc_tracks, _ = get_storm_tracks(all_events=all_events)
+    tc_tracks, problematic = get_storm_tracks(all_events=all_events)
+    if problematic:
+        # Written beside the wind field so a lost cyclone is visible in the
+        # output tree, not only in a log line from the run that dropped it.
+        pd.DataFrame(problematic, columns=["sid", "reason"]).to_csv(
+            out_dir / f"skipped_tracks_{iso3}.csv", index=False)
+        transient = [s for s, r in problematic if "absent from IBTrACS" not in r]
+        logger.error(
+            f"{iso3}: {len(problematic)} of {len(all_events)} storms produced no "
+            f"track ({len(transient)} for reasons other than being absent from "
+            f"IBTrACS) -> {out_dir / f'skipped_tracks_{iso3}.csv'}"
+        )
     tracks = process_storm_tracks(tc_tracks=tc_tracks)
 
     # store_windfields=True causes a segfault on small centroid sets; intensity is
@@ -310,6 +382,11 @@ def generate_all_wind_features(max_workers=5, iso3_filter=None):
 
     out_dir = OUTPUT_DIR / "IBTRACS" / "standard"
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Download the archive before forking: see ensure_ibtracs_available.
+    if len(all_events_global):
+        logger.info("Prefetching the IBTrACS archive...")
+        ensure_ibtracs_available(all_events_global.sid.iloc[0])
 
     logger.info(f"Starting windfield processing for {len(valid_iso3_list)} countries...")
 
