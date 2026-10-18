@@ -6,6 +6,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+from pathlib import Path
+
 import xarray as xr
 from climada.hazard import Centroids, TCTracks, TropCyclone
 from shapely.geometry import LineString
@@ -302,6 +304,37 @@ def covers_storms(path, expected_sids, column="sid"):
     return set(map(str, expected_sids)) <= have
 
 
+def basin_lookup(refresh=False):
+    """Map each storm id to the basin of its first record.
+
+    Returned as a frame of (sid, cyclone_basin) and cached beside the wind
+    fields. Tracks that cross between basins are represented by the basin they
+    formed in, which is the attribution the basin-constrained evaluation uses.
+    """
+    path = OUTPUT_DIR / "IBTRACS" / "standard" / "cyclone_basin.csv"
+    if path.exists() and not refresh:
+        return pd.read_csv(path)
+
+    from climada.util.constants import SYSTEM_DIR
+
+    archives = sorted(Path(SYSTEM_DIR).glob("IBTrACS.ALL.*.nc"))
+    if not archives:
+        logger.error(f"No IBTrACS archive under {SYSTEM_DIR}; cannot map basins")
+        return pd.DataFrame(columns=["sid", "cyclone_basin"])
+
+    with xr.open_dataset(archives[-1]) as ds:
+        decode = lambda v: v.decode() if isinstance(v, bytes) else str(v)
+        sids = [decode(s) for s in ds.sid.values]
+        basins = [decode(b[0]).strip() for b in ds.basin.values]
+
+    df = pd.DataFrame({"sid": sids, "cyclone_basin": basins})
+    df = df[df["cyclone_basin"] != ""].drop_duplicates(subset="sid")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(path, index=False)
+    logger.info(f"Basin lookup: {len(df):,} storms -> {path}")
+    return df
+
+
 def process_single_country(iso3, out_dir, gdf_global, all_events_global, shp_global):
     """Processes a single country's windfield and metadata."""
     wind_file = out_dir / f"windfield_data_{iso3}.csv"
@@ -404,6 +437,8 @@ def generate_all_wind_features(max_workers=5, iso3_filter=None):
     if len(all_events_global):
         logger.info("Prefetching the IBTrACS archive...")
         ensure_ibtracs_available(all_events_global.sid.iloc[0])
+
+    basin_lookup()
 
     logger.info(f"Starting windfield processing for {len(valid_iso3_list)} countries...")
 

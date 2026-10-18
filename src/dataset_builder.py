@@ -10,6 +10,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from src.config import INPUT_DIR, OUTPUT_DIR, resolve_iso3_list
+from src.dynamic_features.process_wind_features import basin_lookup
 from src.utils.exposure import load_time_varying_features
 from src.utils.time_interpolation import event_year_from_disno
 
@@ -356,6 +357,21 @@ def build_country_dataset(iso3, df_impact_country,
     df_final = df_final.merge(df_time, on=["id", "iso3", "year"], how="left")
     if len(df_final) != n_before:
         logging.error(f"{iso3}: exposure merge changed row count {n_before} -> {len(df_final)}")
+
+    # 9. Attach the cyclone's basin, the unit the basin-constrained evaluation
+    # restricts training to.
+    df_basin = basin_lookup()
+    if not df_basin.empty:
+        n_before = len(df_final)
+        df_final = df_final.merge(df_basin, on="sid", how="left")
+        if len(df_final) != n_before:
+            logging.error(f"{iso3}: basin merge changed row count {n_before} -> {len(df_final)}")
+        unmapped = df_final["cyclone_basin"].isna()
+        if unmapped.any():
+            logging.warning(
+                f"{iso3}: {int(unmapped.sum()):,} rows have no basin "
+                f"({sorted(set(df_final.loc[unmapped, 'sid']))[:3]})"
+            )
 
     return df_final
 
