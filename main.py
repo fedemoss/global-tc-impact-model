@@ -47,6 +47,13 @@ def main():
     parser.add_argument("--with-baselines", action="store_true",
                         help="Also run the three reference baselines, so the "
                              "evaluation can compare against them")
+    parser.add_argument("--strategies", nargs="+", default=["global"],
+                        choices=["global", "walk_forward", "geo_constrained"],
+                        help="Cross-validation strategies to run with --run-models. "
+                             "'global' trains on every other cyclone, 'walk_forward' "
+                             "only on cyclones preceding the test one, and "
+                             "'geo_constrained' only on cyclones in the same basin. "
+                             "Each writes to its own output folder")
     parser.add_argument("--recompute", action="store_true",
                         help="Overwrite existing per-event predictions instead of "
                              "reusing them. Required after changing the model or its "
@@ -125,11 +132,12 @@ def main():
         models = ["2-stage-XGBoost"]
         if args.with_baselines:
             models += ["historical", "windspeed-exposed", "windspeed-historical"]
-        for name in models:
-            logging.info(f"Science: Running {name}...")
-            execute_training_run(name, strategy="global",
-                                 aggregate_to_adm1=False,
-                                 recompute=args.recompute)
+        for strategy in args.strategies:
+            for name in models:
+                logging.info(f"Science: Running {name} ({strategy})...")
+                execute_training_run(name, strategy=strategy,
+                                     aggregate_to_adm1=False,
+                                     recompute=args.recompute)
 
     if args.run_interpretability:
         logging.info("Science: Running SHAP Analysis...")
