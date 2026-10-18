@@ -233,18 +233,18 @@ def build_country_dataset(iso3, df_impact_country,
         )
     df_impact_country[["GID_1", "GID_2"]] = df_impact_country[["GID_1", "GID_2"]].astype(object)
 
-    # The impact table should hold one row per (event, cell). Anything else
-    # multiplies the join below instead of failing, so it is collapsed here and
-    # reported rather than left to inflate the row count silently.
-    n_dup = int(df_impact_country.duplicated(subset=["sid", "id"]).sum())
+    # The impact table holds one row per (country-event, cell). The key is
+    # (DisNo., id), not (sid, id): EM-DAT sometimes records two disasters for
+    # one cyclone in one country, with different affected counts, and those are
+    # distinct events rather than duplicates. Anything repeating (DisNo., id)
+    # would multiply the join below instead of failing.
+    n_dup = int(df_impact_country.duplicated(subset=["DisNo.", "id"]).sum())
     if n_dup:
         logging.warning(
-            f"{iso3}: impact table has {n_dup:,} duplicate (sid, id) rows of "
+            f"{iso3}: impact table has {n_dup:,} duplicate (DisNo., id) rows of "
             f"{len(df_impact_country):,}; collapsing to one row per event-cell"
         )
-        df_impact_country = df_impact_country.drop_duplicates(subset=["sid", "id"])
-
-    n_before_impact = len(df_dyn)
+        df_impact_country = df_impact_country.drop_duplicates(subset=["DisNo.", "id"])
     is_national_level = (df_grid_map["GID_1"] == iso3).all()
     if is_national_level:
         # GID_1 doesn't resolve subnationally for this country (see load_grid_gid_mapping) —
@@ -277,13 +277,16 @@ def build_country_dataset(iso3, df_impact_country,
             how="inner"
         )
 
-    # The impact join selects event-cells; it must never create them. Growth
-    # here means a key is non-unique on one side, which is how the row count
+    # Each output row must be one country-event observed at one grid cell. The
+    # join is on sid, so a cyclone with two EM-DAT records legitimately yields
+    # two rows per cell -- one per event -- but a repeated (DisNo., id) means a
+    # key was non-unique and the row count has been multiplied. That is how it
     # ran away by three orders of magnitude before.
-    if len(df_dyn) > n_before_impact:
+    n_dup_out = int(df_dyn.duplicated(subset=["DisNo.", "id"]).sum())
+    if n_dup_out:
         logging.error(
-            f"{iso3}: impact join grew the row count {n_before_impact:,} -> "
-            f"{len(df_dyn):,}; the join keys are not unique"
+            f"{iso3}: impact join produced {n_dup_out:,} duplicate (DisNo., id) "
+            f"rows of {len(df_dyn):,}; the join keys are not unique"
         )
 
     if df_dyn.empty: return None
