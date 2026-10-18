@@ -242,6 +242,22 @@ def build_country_dataset(iso3, df_impact_country,
             f"current schema -- re-run the dynamic stage to regenerate "
             f"EMDAT/impact_data.csv."
         )
+    # A DisNo. ends in the ISO3 of the country the event was recorded for, so
+    # it is only ever attributed to that country's cells. An event reaching a
+    # different country means its administrative units were geolocated outside
+    # it, which the geometry step can do for a territory spanning the
+    # antimeridian, where a centroid taken in plain longitude falls far from
+    # the units it summarises.
+    foreign = df_impact_country["DisNo."].astype(str).str[-3:] != iso3
+    if foreign.any():
+        logging.warning(
+            f"{iso3}: dropping {int(foreign.sum()):,} impact rows belonging to "
+            f"{sorted(set(df_impact_country.loc[foreign, 'DisNo.']))[:5]}"
+        )
+        df_impact_country = df_impact_country[~foreign]
+        if df_impact_country.empty:
+            return None
+
     df_impact_country[["GID_1", "GID_2"]] = df_impact_country[["GID_1", "GID_2"]].astype(object)
 
     # The impact table holds one row per (country-event, cell). The key is
