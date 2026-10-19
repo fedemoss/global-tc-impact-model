@@ -134,11 +134,17 @@ def prepare_data(aggregate_to_adm1=False):
 
 
 def execute_training_run(model_name, strategy, aggregate_to_adm1=False,
-                         event_col="DisNo.", recompute=False):
+                         event_col="DisNo.", recompute=False,
+                         features=None, run_name=None):
     """Orchestrates the data prep and LOOCV execution for a specific model and strategy.
 
     `event_col` is the LOOCV grouping unit: "DisNo." (the paper's country-event
     record, default) or "sid" (the physical cyclone -- see run_loocv_pipeline).
+
+    `features` fits the model on a subset of FEATURES, for an ablation; the
+    omitted ones are still loaded, since the target and the fold keys travel
+    with them. `run_name` is appended to the output folder so that a run with
+    a different feature set does not land on top of the full one.
     """
     logger.info("--- Starting Run ---")
     logger.info(f"Model: {model_name}")
@@ -146,6 +152,10 @@ def execute_training_run(model_name, strategy, aggregate_to_adm1=False,
     logger.info(f"Level: {'ADM1' if aggregate_to_adm1 else 'Grid'}")
     logger.info(f"LOOCV unit: {event_col}")
     logger.info(f"Recompute existing predictions: {recompute}")
+    chosen = list(features or FEATURES)
+    if len(chosen) != len(FEATURES):
+        logger.info(f"Features: {len(chosen)} of {len(FEATURES)}; "
+                    f"omitted {sorted(set(FEATURES) - set(chosen))}")
 
     df = prepare_data(aggregate_to_adm1=aggregate_to_adm1)
 
@@ -177,7 +187,7 @@ def execute_training_run(model_name, strategy, aggregate_to_adm1=False,
     elif model_name == "windspeed-historical":
         model = WindspeedHistoricalModel()
     elif model_name == "2-stage-XGBoost":
-        model = TwoStageXGBoost(features=FEATURES)
+        model = TwoStageXGBoost(features=list(features or FEATURES))
     else:
         raise ValueError(
             f"Unknown model_name: {model_name}. Allowed: 'historical', "
@@ -190,6 +200,8 @@ def execute_training_run(model_name, strategy, aggregate_to_adm1=False,
     # overwrite one another.
     level_str = "adm1_trained" if aggregate_to_adm1 else "grid"
     output_folder = f"model_output/{model_name}_{strategy}_{level_str}"
+    if run_name:
+        output_folder += f"_{run_name}"
     if event_col != "DisNo.":
         # Keep non-default grouping in its own directory: fold filenames are
         # built from the grouping key, so mixing them would corrupt the

@@ -34,6 +34,40 @@ from src.interpretability.shap_analysis import main_shap_analysis
 from src.utils.logging_setup import configure_logging
 
 
+
+def resolve_features(args):
+    """The feature set to fit on, and the name that keeps its output apart.
+
+    Returns (None, None) for the full set, so an ordinary run is unaffected.
+    """
+    from src.config import FEATURES
+
+    if args.features and args.exclude_features:
+        raise SystemExit("--features and --exclude-features are mutually exclusive")
+
+    if args.features:
+        unknown = sorted(set(args.features) - set(FEATURES))
+        if unknown:
+            raise SystemExit(f"not features of this model: {unknown}\n"
+                             f"available: {sorted(FEATURES)}")
+        chosen = [f for f in FEATURES if f in set(args.features)]
+        name = args.run_name or "subset_" + "_".join(sorted(args.features))[:60]
+        return chosen, name
+
+    if args.exclude_features:
+        unknown = sorted(set(args.exclude_features) - set(FEATURES))
+        if unknown:
+            raise SystemExit(f"not features of this model: {unknown}\n"
+                             f"available: {sorted(FEATURES)}")
+        chosen = [f for f in FEATURES if f not in set(args.exclude_features)]
+        if not chosen:
+            raise SystemExit("every feature was excluded")
+        name = args.run_name or "no_" + "_".join(sorted(args.exclude_features))
+        return chosen, name
+
+    return None, args.run_name
+
+
 def main():
     parser = argparse.ArgumentParser(description="Global TC Impact Data Factory")
 
@@ -48,6 +82,18 @@ def main():
     parser.add_argument("--with-baselines", action="store_true",
                         help="Also run the three reference baselines, so the "
                              "evaluation can compare against them")
+    parser.add_argument("--exclude-features", nargs="+", default=None,
+                        metavar="FEATURE",
+                        help="Fit without these features, for an ablation. The "
+                             "run is written to its own folder, named after "
+                             "what was left out unless --run-name says "
+                             "otherwise")
+    parser.add_argument("--features", nargs="+", default=None, metavar="FEATURE",
+                        help="Fit on exactly these features. Mutually "
+                             "exclusive with --exclude-features")
+    parser.add_argument("--run-name", default=None,
+                        help="Suffix for the output folder, so that runs "
+                             "differing only in their features stay apart")
     parser.add_argument("--train-at", choices=["grid", "adm1"], default="grid",
                         help="Level the model is fitted at. 'grid' fits per "
                              "cell and aggregates the predictions to ADM1 "
@@ -135,11 +181,14 @@ def main():
         # Fitted on grid cells, matching the hyperparameter search; predictions
         # are aggregated to ADM1 afterwards, which is the level EM-DAT reports
         # at and the level the baselines are compared on.
+        features, run_name = resolve_features(args)
         for strategy in args.strategies:
-            logging.info(f"Science: Running 2-stage-XGBoost ({strategy}, fitted at {args.train_at})...")
+            logging.info(f"Science: Running 2-stage-XGBoost ({strategy}, "
+                         f"fitted at {args.train_at})...")
             execute_training_run("2-stage-XGBoost", strategy=strategy,
                                  aggregate_to_adm1=(args.train_at == "adm1"),
-                                 recompute=args.recompute)
+                                 recompute=args.recompute,
+                                 features=features, run_name=run_name)
 
         if args.with_baselines:
             # The baselines are deterministic rules with no fitted parameter,
