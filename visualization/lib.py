@@ -1,7 +1,9 @@
-"""Shared loading and plotting helpers for the visualization notebooks.
+"""Loading and plotting helpers shared by the notebooks in this folder.
 
-Kept out of the notebooks so the figures and the tables are built from one
-definition of what a model output is and how a prediction is categorised.
+Kept out of the notebooks so that the figures and the tables are built from
+one definition of what a model output is and how a prediction is categorised,
+and so that the plotting, which is the bulk of the code, does not crowd out
+the analysis.
 """
 import numpy as np
 import pandas as pd
