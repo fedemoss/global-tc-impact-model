@@ -92,18 +92,22 @@ def load_and_evaluate_all_models(level="adm1", strategy="global",
     print(f"Evaluating {level.upper()} level results using {strategy} strategy...")
     
     for model_name in model_names:
-        folder_path = OUTPUT_DIR / f"model_output/{model_name}_{strategy}_{level}"
-        
-        if not folder_path.exists():
-            print(f"Warning: Results folder not found for {model_name}")
+        stem = OUTPUT_DIR / f"model_output/{model_name}_{strategy}_{level}"
+        bundle = stem.with_suffix(".parquet")
+
+        # A fitted model writes one file per fold; a rule has no folds and is
+        # written whole. Either is read here.
+        if bundle.exists():
+            df_model = pd.read_parquet(bundle)
+        elif stem.exists():
+            csv_files = list(stem.glob("predictions_event_*.csv"))
+            if not csv_files:
+                continue
+            df_model = pd.concat([pd.read_csv(f) for f in csv_files],
+                                 ignore_index=True)
+        else:
+            print(f"Warning: no results found for {model_name}")
             continue
-            
-        # Combine all per-event CSVs into one evaluation dataframe
-        csv_files = list(folder_path.glob("predictions_event_*.csv"))
-        if not csv_files:
-            continue
-            
-        df_model = pd.concat([pd.read_csv(f) for f in csv_files], ignore_index=True)
         models_dict[model_name] = df_model
         
         # Compute binary metrics, with event-level CIs when asked for

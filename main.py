@@ -28,6 +28,7 @@ from src.dynamic_features.process_historical_features import generate_all_histor
 
 # Build & Model
 from src.dataset_builder import compile_global_dataset
+from src.models.baselines import build_all_baselines
 from src.models.train import execute_training_run
 from src.interpretability.shap_analysis import main_shap_analysis
 from src.utils.logging_setup import configure_logging
@@ -129,15 +130,19 @@ def main():
         # Fitted on grid cells, matching the hyperparameter search; predictions
         # are aggregated to ADM1 afterwards, which is the level EM-DAT reports
         # at and the level the baselines are compared on.
-        models = ["2-stage-XGBoost"]
-        if args.with_baselines:
-            models += ["historical", "windspeed-exposed", "windspeed-historical"]
         for strategy in args.strategies:
-            for name in models:
-                logging.info(f"Science: Running {name} ({strategy})...")
-                execute_training_run(name, strategy=strategy,
-                                     aggregate_to_adm1=False,
-                                     recompute=args.recompute)
+            logging.info(f"Science: Running 2-stage-XGBoost ({strategy})...")
+            execute_training_run("2-stage-XGBoost", strategy=strategy,
+                                 aggregate_to_adm1=False,
+                                 recompute=args.recompute)
+
+        if args.with_baselines:
+            # The baselines are deterministic rules with no fitted parameter,
+            # so they are evaluated in one pass over the dataset rather than
+            # through the fold loop, and their predictions are kept whole
+            # rather than split per event.
+            logging.info("Science: Scoring the reference baselines...")
+            build_all_baselines()
 
     if args.run_interpretability:
         logging.info("Science: Running SHAP Analysis...")

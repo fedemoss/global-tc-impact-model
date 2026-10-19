@@ -20,6 +20,8 @@ import logging
 import numpy as np
 import pandas as pd
 
+from src.config import OUTPUT_DIR
+
 logger = logging.getLogger(__name__)
 
 TARGET_NAME = "perc_affected_pop_grid_region"
@@ -38,26 +40,37 @@ def country_median_past_impact(df, target_name=TARGET_NAME):
     is how the published baseline was computed -- flagged here rather than
     silently changed, since correcting it would move the reported numbers.
     """
-    country_events = (
+    events = (
         df.groupby(["GID_0", "DisNo.", "year"], observed=True)[target_name]
         .apply(lambda x: x.unique())
         .reset_index()
     )
-    country_events["impact_percent"] = country_events[target_name].apply(
+    events["impact_percent"] = events[target_name].apply(
         lambda arr: [v for v in arr if v != 0])
-    country_events = country_events.drop(columns=target_name)
+    events = events.drop(columns=target_name)
 
-    rows = []
-    for _, row in country_events.iterrows():
-        past = country_events[
-            (country_events["GID_0"] == row["GID_0"])
-            & (country_events["year"] <= row["year"])
-            & (country_events["DisNo."] != row["DisNo."])
-        ]
-        impacts = [v for sub in past["impact_percent"] for v in sub]
-        rows.append((row["GID_0"], row["DisNo."], np.median(impacts) if impacts else 0.0))
+    # Each event is paired with the recorded impacts of its country's other
+    # events up to its own year, and the median taken over that pool. Pairing
+    # within a country keeps the product small: the countries are independent,
+    # so this never forms a pool across the whole record.
+    sources = (events.explode("impact_percent")
+               .dropna(subset=["impact_percent"])
+               .rename(columns={"DisNo.": "source_event", "year": "source_year",
+                                "impact_percent": "impact"}))
+    pairs = events[["GID_0", "DisNo.", "year"]].merge(
+        sources[["GID_0", "source_event", "source_year", "impact"]],
+        on="GID_0", how="inner")
+    pairs = pairs[(pairs["source_year"] <= pairs["year"])
+                  & (pairs["source_event"] != pairs["DisNo."])]
 
-    return pd.DataFrame(rows, columns=["GID_0", "DisNo.", "median_pct"])
+    medians = (pairs.groupby(["GID_0", "DisNo."], observed=True)["impact"]
+               .median().rename("median_pct").reset_index())
+    out = events[["GID_0", "DisNo."]].merge(medians, on=["GID_0", "DisNo."],
+                                            how="left")
+    # An event with no earlier impact in its country has no pool to take a
+    # median over, and predicts nothing.
+    out["median_pct"] = pd.to_numeric(out["median_pct"], errors="coerce").fillna(0.0)
+    return out.reset_index(drop=True)
 
 
 class _Baseline:
@@ -117,3 +130,71 @@ class WindspeedHistoricalModel(HistoricalModel):
         median = pd.Series(self._median_for(df_train, df_test), index=df_test.index)
         hit = (df_test["wind_speed"] > self.wind_threshold).astype(float)
         return median * hit
+
+
+# --------------------------------------------------------------------------
+# Direct evaluation
+# --------------------------------------------------------------------------
+#: Written beside the per-event folders the fitted models produce.
+BUNDLE_SUFFIX = ".parquet"
+
+
+def predict_all(df, wind_threshold=WIND_THRESHOLD, target_name=TARGET_NAME):
+    """Every baseline's grid-cell prediction, in one pass over the dataset.
+
+    These are rules, not fitted models: none of them has a parameter estimated
+    from a training split, so there is nothing for cross-validation to hold
+    out. The one leave-one-out element -- a country's median must not include
+    the event being predicted -- is a property of
+    ``country_median_past_impact`` and needs no fold.
+
+    Returns {model name: frame with `prediction_perc`}.
+    """
+    medians = country_median_past_impact(df, target_name)
+    base = df.merge(medians, on=["GID_0", "DisNo."], how="left")
+    base["median_pct"] = base["median_pct"].fillna(0.0)
+    exposed = (base["wind_speed"] > wind_threshold).astype(float)
+
+    percentages = {
+        "historical": base["median_pct"],
+        "windspeed-exposed": 100.0 * exposed,
+        "windspeed-historical": base["median_pct"] * exposed,
+    }
+
+    out = {}
+    for name, perc in percentages.items():
+        frame = base.drop(columns=["median_pct"]).copy()
+        frame["prediction_perc"] = perc.clip(lower=0, upper=100).to_numpy()
+        out[name] = frame
+    return out
+
+
+def build_all_baselines(df=None, strategy="global", wind_threshold=WIND_THRESHOLD,
+                        target_name=TARGET_NAME):
+    """Score every baseline and write one bundle per model and level.
+
+    The fitted models write a file per event because each event is a separate
+    fold; a rule has no folds, so its predictions are kept whole. The file
+    names keep the `<model>_<strategy>_<level>` form the evaluation reads, so
+    the two sit side by side.
+    """
+    from src.evaluation.aggregation import aggregate_predictions_to_adm1
+    from src.models.train import load_training_dataset, prepare_data
+
+    if df is None:
+        df = prepare_data(aggregate_to_adm1=False)
+
+    written = []
+    for name, grid in predict_all(df, wind_threshold, target_name).items():
+        grid_path = OUTPUT_DIR / f"model_output/{name}_{strategy}_grid{BUNDLE_SUFFIX}"
+        grid_path.parent.mkdir(parents=True, exist_ok=True)
+        grid.to_parquet(grid_path, index=False)
+
+        adm1 = aggregate_predictions_to_adm1(grid, target_name=target_name)
+        adm1_path = OUTPUT_DIR / f"model_output/{name}_{strategy}_adm1{BUNDLE_SUFFIX}"
+        adm1.to_parquet(adm1_path, index=False)
+
+        logger.info(f"{name}: {len(grid):,} grid rows -> {grid_path.name}; "
+                    f"{len(adm1):,} ADM1 rows -> {adm1_path.name}")
+        written += [grid_path, adm1_path]
+    return written
