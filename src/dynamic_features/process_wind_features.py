@@ -313,7 +313,9 @@ def basin_lookup(refresh=False):
     """
     path = OUTPUT_DIR / "IBTRACS" / "standard" / "cyclone_basin.csv"
     if path.exists() and not refresh:
-        return pd.read_csv(path)
+        # keep_default_na: the North Atlantic basin code is "NA", which the
+        # default missing-value tokens would read back as a null.
+        return pd.read_csv(path, keep_default_na=False, na_values=[])
 
     from climada.util.constants import SYSTEM_DIR
 
