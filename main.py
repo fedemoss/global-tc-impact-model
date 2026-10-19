@@ -48,6 +48,11 @@ def main():
     parser.add_argument("--with-baselines", action="store_true",
                         help="Also run the three reference baselines, so the "
                              "evaluation can compare against them")
+    parser.add_argument("--train-at", choices=["grid", "adm1"], default="grid",
+                        help="Level the model is fitted at. 'grid' fits per "
+                             "cell and aggregates the predictions to ADM1 "
+                             "afterwards; 'adm1' fits the administrative units "
+                             "directly. Results are kept in separate folders")
     parser.add_argument("--strategies", nargs="+", default=["global"],
                         choices=["global", "walk_forward", "geo_constrained"],
                         help="Cross-validation strategies to run with --run-models. "
@@ -131,9 +136,9 @@ def main():
         # are aggregated to ADM1 afterwards, which is the level EM-DAT reports
         # at and the level the baselines are compared on.
         for strategy in args.strategies:
-            logging.info(f"Science: Running 2-stage-XGBoost ({strategy})...")
+            logging.info(f"Science: Running 2-stage-XGBoost ({strategy}, fitted at {args.train_at})...")
             execute_training_run("2-stage-XGBoost", strategy=strategy,
-                                 aggregate_to_adm1=False,
+                                 aggregate_to_adm1=(args.train_at == "adm1"),
                                  recompute=args.recompute)
 
         if args.with_baselines:

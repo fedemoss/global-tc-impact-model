@@ -184,7 +184,11 @@ def execute_training_run(model_name, strategy, aggregate_to_adm1=False,
             "'windspeed-exposed', 'windspeed-historical', '2-stage-XGBoost'."
         )
 
-    level_str = "adm1" if aggregate_to_adm1 else "grid"
+    # A grid-level run is aggregated to ADM1 afterwards and writes that to
+    # <model>_<strategy>_adm1, so a run fitted at ADM1 is kept apart from it:
+    # the two are different models of the same units and would otherwise
+    # overwrite one another.
+    level_str = "adm1_trained" if aggregate_to_adm1 else "grid"
     output_folder = f"model_output/{model_name}_{strategy}_{level_str}"
     if event_col != "DisNo.":
         # Keep non-default grouping in its own directory: fold filenames are
