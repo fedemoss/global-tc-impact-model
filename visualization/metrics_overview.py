@@ -28,12 +28,20 @@ def output_folder(model_name, strategy="global", level="adm1"):
 
 
 def load_model(model_name, strategy="global", level="adm1"):
-    """Concatenate one model's per-event predictions, or None if absent."""
+    """One model's predictions, or None if it has not been scored.
+
+    A fitted model writes a file per fold; a rule has no folds and is written
+    whole, so both layouts are accepted.
+    """
     folder = output_folder(model_name, strategy, level)
-    files = sorted(folder.glob("predictions_event_*.csv"))
-    if not files:
-        return None
-    df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+    bundle = folder.with_suffix(".parquet")
+    if bundle.exists():
+        df = pd.read_parquet(bundle)
+    else:
+        files = sorted(folder.glob("predictions_event_*.csv"))
+        if not files:
+            return None
+        df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
     if "GID_0" not in df.columns and "DisNo." in df.columns:
         df["GID_0"] = df["DisNo."].astype(str).str[-3:]
     return df
