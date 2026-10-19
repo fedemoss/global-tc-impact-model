@@ -45,6 +45,10 @@ _TRAINING_COLUMNS = sorted(set(FEATURES) | {
     # Diagnostic, not a predictor: marks cells whose reported impact exceeded
     # the population it was attributed to and was capped at 100%.
     "impact_capped",
+    # The basin the cyclone formed in, which the basin-constrained evaluation
+    # restricts training to. It belongs to the storm, not to the country: a
+    # country may be struck from more than one basin.
+    "cyclone_basin",
 })
 
 
@@ -79,6 +83,11 @@ def prepare_data(aggregate_to_adm1=False):
     df = df.drop_duplicates().reset_index(drop=True)
 
     regions = pd.read_csv(INPUT_DIR / "model_input_dataset" / "un_regions.csv")
+    # The region table carries a basin per country, which is not the same
+    # thing as the basin a storm formed in and is absent for several
+    # countries. The dataset's own column is the one to keep.
+    if "cyclone_basin" in regions.columns and "cyclone_basin" in df.columns:
+        regions = regions.drop(columns="cyclone_basin")
     df = df.merge(regions, on="iso3", how="left")
 
     # Filter events
