@@ -191,6 +191,13 @@ def build_all_baselines(df=None, strategy="global", wind_threshold=WIND_THRESHOL
         grid.to_parquet(grid_path, index=False)
 
         adm1 = aggregate_predictions_to_adm1(grid, target_name=target_name)
+        # The aggregation groups on the country-event, which drops the storm
+        # identifier. Intervals are resampled over the physical cyclone, and a
+        # cyclone striking several countries yields one record per country, so
+        # the identifier is put back.
+        if "sid" in grid.columns and "sid" not in adm1.columns:
+            cyclones = grid[["DisNo.", "sid"]].drop_duplicates()
+            adm1 = adm1.merge(cyclones, on="DisNo.", how="left")
         adm1_path = OUTPUT_DIR / f"model_output/{name}_{strategy}_adm1{BUNDLE_SUFFIX}"
         adm1.to_parquet(adm1_path, index=False)
 
