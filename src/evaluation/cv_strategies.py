@@ -73,6 +73,13 @@ def run_loocv_pipeline(df, events, model, strategy="global", output_folder="looc
                 
         elif strategy == "geo_constrained":
             event_basin = df.loc[df[event_col] == ev, "cyclone_basin"].iloc[0]
+            if pd.isna(event_basin):
+                raise ValueError(
+                    f"{ev} has no cyclone_basin. Every storm in IBTrACS has "
+                    f"one, so a missing value means the column was dropped or "
+                    f"overwritten before this point -- skipping the event here "
+                    f"would quietly shrink the evaluation instead."
+                )
             # Train only on cyclones in the exact same basin
             df_train = df[(df[event_col] != ev) & (df["cyclone_basin"] == event_basin)].copy()
             if df_train.empty:
