@@ -63,6 +63,7 @@ Nothing is written until the search completes; pass `--output` to write
 somewhere other than the configured path.
 """
 import argparse
+import gc
 import json
 import logging
 import sys
@@ -472,6 +473,17 @@ def main(args):
     df = load_dataset(args.input)
     severity = event_severity_labels(df)
 
+    # The filters above need columns the fitting does not, and at global
+    # coverage the unused ones are a large share of the frame. Keeping only
+    # what the stages, the folds and the aggregation read leaves room for the
+    # training copies each fit makes.
+    needed = list(dict.fromkeys(
+        list(FEATURES) + ADM1_KEYS + ["sid", "id", "population", TARGET_NAME]))
+    missing = [c for c in needed if c not in df.columns]
+    if missing:
+        raise KeyError(f"the dataset is missing {missing}")
+    df = df[needed]
+
     if df["sid"].nunique() < MIN_EVENTS:
         logging.error(
             f"only {df['sid'].nunique()} cyclones available; at least {MIN_EVENTS} are needed "
@@ -485,6 +497,10 @@ def main(args):
 
     df_search = df[df["sid"].isin(search_events)].copy()
     df_holdout = df[df["sid"].isin(holdout_events)].copy()
+    # The two splits cover everything that follows; the parent frame is as
+    # large as both together and nothing reads it again.
+    del df
+    gc.collect()
 
     n_folds = min(args.n_folds, max(2, len(search_events)))
     folds = make_folds(df_search, severity, n_folds, args.random_state)
