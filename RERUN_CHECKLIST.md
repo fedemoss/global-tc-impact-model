@@ -45,11 +45,25 @@ search space, the classic sign of a censored optimum. This branch widens the
 grids (u1/u2 up to 20, threshold up to 0.80).
 
 - [ ] Re-run the search on the widened grids (after the merge, so search and
-      evaluation share the sid unit):
+      evaluation share the sid unit). The script was restructured: the
+      threshold is no longer a search dimension -- every cutoff is scored for
+      free from each candidate's stored probabilities -- and a second,
+      factorized mode maps the full u1 x u2 surface at the cost of
+      |u1|+|u2| fits per fold instead of |u1|x|u2|:
 
       ```bash
-      python test/hyperparameter_search.py --n-iter 80 --n-events 200
+      # phase 1: tree parameters + ratios, all thresholds scored per candidate
+      python test/hyperparameter_search.py --n-iter 60 --n-events 200
+      # phase 2: exhaustive ratio surface, tree parameters frozen at phase 1's winner
+      python test/hyperparameter_search.py --search ratios
       ```
+
+      Phase 1 at 60 candidates costs about what 60 old candidates did while
+      covering 11 cutoffs each; phase 2 is ~80 stage fits (under an hour on
+      the same box) for all 64 ratio pairs. The output JSON carries the
+      threshold-response curves (CV and holdout) for the appendix figure,
+      the top-5 spread, and per-ratio saturation flags (a saturated winning
+      u means "no undersampling needed" -- say it that way).
 
 - [ ] If the selection moves interior, the old values were censored; if it
       stays at u2=10 / 0.70, say so in the appendix — that is a fine answer.
