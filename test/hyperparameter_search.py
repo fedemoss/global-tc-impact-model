@@ -3,18 +3,34 @@
 
 Writes the winning configuration to `HYPERPARAMETERS_PATH`
 (`data/model_hyperparameters.json` by default), which
-`src/models/two_stage_xgb.py` loads automatically - so tuning and production use
-the same numbers without anyone copying them by hand.
+`src/models/two_stage_xgb.py` loads automatically - so tuning and production
+use the same numbers without anyone copying them by hand.
 
 Design, and why it is this way
 ------------------------------
 
-**Both stages are searched together.** Tuning the classifier first and the
-regressor afterwards would miss their interaction: how aggressively stage 1
-flags cells changes which rows stage 2 ever sees, so the best regressor depends
-on the classifier it sits behind. The search space therefore spans both stages
-plus the model's own class-balancing ratios (`u1`, `u2`) and the stage-1
-decision threshold.
+**The decision threshold is never searched - it is swept for free.** Stage 1's
+cutoff (`clf_threshold`) changes nothing that is trained: stage 1 is fitted
+without it and stage 2 is fitted on *observed* positives, so the threshold
+only gates which test cells receive the stage-2 estimate at prediction time.
+Every candidate is therefore fitted once, its out-of-fold probabilities and
+stage-2 estimates are kept, and ALL thresholds are scored from them. Earlier
+versions sampled the threshold as a search dimension, which paid ten XGBoost
+fits to compare two cutoffs that one fit and two cheap scoring passes settle.
+
+**Two phases, matched to what each dimension is.**
+
+* ``--search random`` (default) draws candidates over the fourteen tree
+  parameters and the two balancing ratios. High-dimensional, plateau-shaped:
+  random search is the right tool, and its job is to land on the plateau.
+* ``--search ratios`` grids u1 x u2 exhaustively with the tree parameters
+  frozen (from an earlier winner's JSON, or the built-in defaults). The
+  ratios and the threshold set the precision/recall operating point the
+  paper's story rests on, and they are only two training dimensions - mapping
+  the whole surface is affordable and defensible where a sampled point is
+  not. The grid is also factorized: u1 touches only stage 1 and u2 only
+  stage 2, so a fold needs one classifier per u1 and one regressor per u2
+  (|u1| + |u2| fits), not |u1| x |u2| pairs.
 
 **Folds are split by physical cyclone, never by grid cell or country-event
 record.** Grid cells within one cyclone are strongly correlated - same storm,
@@ -22,30 +38,26 @@ same country, often adjacent land - and a storm that hits several countries
 contributes several EM-DAT `DisNo.` records. Random row-wise folds would put
 near-duplicate rows on both sides of the split, and `DisNo.`-wise folds would
 put the same storm on both sides through different countries.
-`StratifiedGroupKFold` on the IBTrACS `sid` keeps every cyclone whole and keeps
-the severity mix even across folds.
+`StratifiedGroupKFold` on the IBTrACS `sid` keeps every cyclone whole and
+keeps the severity mix even across folds.
 
-**A held-out set of events is scored exactly once.** Hyperparameters are chosen
-on cross-validated folds; the held-out events are touched only at the end. The
-cross-validated score is optimistic by construction (it is what was optimised),
-so the held-out number is the one to quote.
+**A held-out set of cyclones is scored exactly once**, after selection. The
+cross-validated score is optimistic by construction (it is what was
+optimised), so the held-out number is the one to quote. The holdout's full
+threshold curve is stored for the response-surface figure, but the quotable
+value is the one at the selected threshold.
 
-**Metrics are computed on pooled out-of-fold predictions, aggregated to ADM1.**
-Impact is reported at admin level, not per grid cell, so the metric is computed
-where the labels actually live. Pooling across folds rather than averaging
-per-fold scores avoids unstable precision/recall on folds that contain few
-positive events.
-
-**Random search by default.** The space below has ~17 dimensions; an exhaustive
-grid over it is not feasible, and random search covers the important dimensions
-far better for the same budget. `--search grid` is available for a small,
-deliberately reduced space.
+**Metrics are computed on pooled out-of-fold predictions, aggregated to
+ADM1**, where impact is actually reported, at both the "affected at all" (0%)
+and "highly affected" (15%) thresholds. Selection is on `--select-on`
+(default `f1_high`, the paper's objective); the top candidates' spread is
+written out so a winner inside the noise band is visible as such.
 
 Usage
 -----
     python test/hyperparameter_search.py --n-iter 80 --n-events 200
-    python test/hyperparameter_search.py --dry-run            # tiny, for a smoke test
-    python test/hyperparameter_search.py --search grid --n-jobs 4
+    python test/hyperparameter_search.py --search ratios
+    python test/hyperparameter_search.py --dry-run     # tiny, for a smoke test
 
 Nothing is written until the search completes; pass `--output` to write
 somewhere other than the configured path.
@@ -53,17 +65,14 @@ somewhere other than the configured path.
 import argparse
 import json
 import logging
-import os
 import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
-from sklearn.metrics import (
-    f1_score, mean_absolute_error, precision_score, recall_score,
-)
-from sklearn.model_selection import ParameterGrid, ParameterSampler, train_test_split
+from sklearn.model_selection import ParameterSampler, train_test_split
+from xgboost import XGBClassifier, XGBRegressor
 
 try:
     from sklearn.model_selection import StratifiedGroupKFold
@@ -75,9 +84,6 @@ except ImportError:  # scikit-learn < 0.24
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.config import FEATURES, HYPERPARAMETERS_PATH, INPUT_DIR
-from src.evaluation.aggregation import (
-    aggregate_predictions_to_adm1, categorise)
-from src.models.train import load_training_dataset
 from src.models.two_stage_xgb import TwoStageXGBoost
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
@@ -86,18 +92,28 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 TARGET_NAME = "perc_affected_pop_grid_region"
 RANDOM_STATE = 0
 
-# The two thresholds the model itself is built around: 0 separates "affected at
-# all" (stage 1's target) and 15 separates "high impact" (the cutoff stage 2's
-# balancing uses, and the paper's "highly affected" class).
+# The two thresholds the model itself is built around: 0 separates "affected
+# at all" (stage 1's target) and 15 separates "high impact" (strictly >15,
+# the paper's category boundary).
 IMPACT_THRESHOLD_LOW = 0
 IMPACT_THRESHOLD_HIGH = 15
 
+# Stage-1 cutoffs scored for every candidate. Not a search dimension: every
+# value is evaluated from each candidate's stored probabilities.
+CLF_THRESHOLDS = (0.40, 0.50, 0.60, 0.70, 0.80, 0.90)
 
-# --------------------------------------------------------------------------
-# Search space
-# --------------------------------------------------------------------------
-# Stage 1 ("clf_"), stage 2 ("reg_"), the balancing ratios and the decision
-# threshold, all drawn jointly.
+# Balancing ratios. The last search selected u2 = 10 and threshold 0.70, both
+# at the edge of the previous grids; these extend past them so a boundary
+# optimum is either confirmed interior or exposed as censored. A large u
+# saturates once it asks for more majority rows than exist - the saturation
+# share is reported, and a saturated winner simply means "no undersampling".
+# The previous search selected u2 = 10 and a cutoff of 0.70, both at the edge
+# of the grid then in use. A boundary optimum may be censored, so the ladder
+# runs past them: dense below 10, where one step changes the training set
+# substantially, and wider above. Each result records whether the ratio
+# saturated, since beyond that point a larger ratio is the same training set.
+U_VALUES = (1, 2, 5, 8, 10, 12, 15, 17, 20, 22, 25)
+
 PARAM_SPACE = {
     "clf_learning_rate": [0.01, 0.03, 0.05, 0.1],
     "clf_max_depth": [3, 4, 5, 6],
@@ -113,46 +129,8 @@ PARAM_SPACE = {
     "reg_subsample": [0.6, 0.8, 1.0],
     "reg_colsample_bytree": [0.6, 0.8, 1.0],
     "reg_n_estimators": [100, 200, 400],
-    # Undersampling ratios: how many majority rows are kept per minority row in
-    # each stage (TwoStageXGBoost.oversample keeps every minority row and
-    # downsamples the majority to u x that count, despite the method's name).
-    # They are part of the model's design, not a preprocessing detail: the
-    # classes are very unbalanced, so how hard each stage is rebalanced trades
-    # recall against precision directly, and interacts with clf_threshold.
-    # u = 1 is a fully balanced training set; larger keeps the data closer to
-    # its natural imbalance.
-    # The last search selected u2 = 10 and clf_threshold = 0.70 -- both at the
-    # edge of the previous grid. A boundary optimum may be censored, so the
-    # grids extend past them; if the selection moves interior, it was.
-    "u1": [1, 2, 3, 5, 8, 10, 15, 20],   # stage 1, affected vs not affected
-    "u2": [1, 2, 3, 5, 8, 10, 15, 20],   # stage 2, high impact vs low impact
-    "clf_threshold": [0.30, 0.40, 0.50, 0.60, 0.70, 0.75, 0.80],
-}
-
-# A deliberately small space for --search grid, which is exhaustive and so can
-# only afford a few dimensions.
-# An exhaustive grid can only afford a few dimensions, so the ones kept here are
-# those the model is most sensitive to - including both undersampling ratios,
-# which are searched rather than pinned. This is 2*2*2*2*6*6*3 = 1728
-# candidates, i.e. 8640 two-stage fits at the default 5 folds: run it with
-# --n-jobs, or prefer the random search, which covers the same space far more
-# cheaply.
-PARAM_GRID_SMALL = {
-    "clf_learning_rate": [0.01, 0.05],
-    "clf_max_depth": [3, 5],
-    "reg_learning_rate": [0.01, 0.05],
-    "reg_max_depth": [3, 5],
-    "u1": [1, 2, 3, 5, 8, 10, 15, 20],
-    "u2": [1, 2, 3, 5, 8, 10, 15, 20],
-    "clf_threshold": [0.4, 0.5, 0.6, 0.7, 0.8],
-}
-# Held fixed across the grid, at the production defaults, so the exhaustive
-# sweep stays tractable. The random search varies all of these.
-GRID_DEFAULTS = {
-    "clf_min_child_weight": 1, "clf_gamma": 0.5, "clf_subsample": 0.8,
-    "clf_colsample_bytree": 0.8, "clf_n_estimators": 200,
-    "reg_min_child_weight": 1, "reg_gamma": 0.5, "reg_subsample": 0.8,
-    "reg_colsample_bytree": 0.8, "reg_n_estimators": 200,
+    "u1": list(U_VALUES),
+    "u2": list(U_VALUES),
 }
 
 
@@ -176,19 +154,22 @@ def xgb_params_from_candidate(cand, nthread=1):
     return clf_params, reg_params
 
 
+def candidate_from_params(clf_params, reg_params):
+    """The flat candidate encoding of two existing parameter dicts."""
+    cand = {}
+    for prefix, params in (("clf", clf_params), ("reg", reg_params)):
+        for key in ("learning_rate", "max_depth", "min_child_weight", "gamma",
+                    "subsample", "colsample_bytree", "n_estimators"):
+            cand[f"{prefix}_{key}"] = params[key]
+    return cand
+
+
 # --------------------------------------------------------------------------
 # Data
 # --------------------------------------------------------------------------
 def load_dataset(input_path):
-    """Load the model input and apply the paper's event-selection filters.
-
-    The same three constraints the production evaluation uses: more than 100
-    people affected, the event reported subnationally, and not every GID_1 in
-    the country flagged as affected (which carries no spatial information).
-    """
-    # Same pruned, dictionary-encoded read the training path uses: the full
-    # frame does not fit in memory at global coverage.
-    df = load_training_dataset(input_path).drop_duplicates().reset_index(drop=True)
+    """Load the model input and apply the paper's event-selection filters."""
+    df = pd.read_parquet(input_path).drop_duplicates().reset_index(drop=True)
 
     c1 = df[df["Total Affected"] > 100]["DisNo."].unique()
     c2 = df[df["level"] != "ADM0"]["DisNo."].unique()
@@ -204,6 +185,14 @@ def load_dataset(input_path):
     keep = set(c1) & set(c2) & set(c3)
     df = df[df["DisNo."].isin(keep)].drop_duplicates().reset_index(drop=True)
 
+    if df.empty:
+        raise ValueError(
+            f"No events survive the selection filters in {input_path}. "
+            f"Of the input's events, {len(c1)} have >100 affected, {len(c2)} are reported "
+            f"subnationally and {len(c3)} do not have every GID_1 affected. A small "
+            f"single-country extract will usually fail all three - point --input at the "
+            f"full dataset."
+        )
     if "sid" not in df.columns or df["sid"].isna().any():
         raise ValueError(
             "the grouping unit is the physical cyclone: every row needs a non-null "
@@ -219,15 +208,6 @@ def load_dataset(input_path):
         f"{df['sid'].nunique()} physical cyclones / {df['DisNo.'].nunique()} country-event "
         f"records / {len(df):,} grid-cell rows after filtering"
     )
-
-    if df.empty:
-        raise ValueError(
-            f"No events survive the selection filters in {input_path}. "
-            f"Of the input's events, {len(c1)} have >100 affected, {len(c2)} are reported "
-            f"subnationally and {len(c3)} do not have every GID_1 affected. A small "
-            f"single-country extract (e.g. the ATG/FJI/HTI development subset) will "
-            f"usually fail all three - point --input at the full dataset."
-        )
     return df
 
 
@@ -236,14 +216,13 @@ def event_severity_labels(df, target_name=TARGET_NAME):
     def categorize(x):
         if x == 0:
             return 0
-        return 1 if x < IMPACT_THRESHOLD_HIGH else 2
+        return 1 if x <= IMPACT_THRESHOLD_HIGH else 2
     return df.groupby("sid", observed=True)[target_name].max().apply(categorize)
 
 
 def split_events(df, severity, n_events, test_fraction, random_state=RANDOM_STATE):
     """A representative cyclone subsample, split into a search pool and a held-out set."""
     all_events = df["sid"].unique().tolist()
-
     if 0 < n_events < len(all_events):
         events_for_search, _ = train_test_split(
             all_events, train_size=n_events, random_state=random_state,
@@ -251,7 +230,6 @@ def split_events(df, severity, n_events, test_fraction, random_state=RANDOM_STAT
         )
     else:
         events_for_search = all_events
-
     search_events, holdout_events = train_test_split(
         events_for_search, test_size=test_fraction, random_state=random_state,
         stratify=severity.loc[events_for_search],
@@ -268,7 +246,6 @@ def make_folds(df_search, severity, n_folds, random_state=RANDOM_STATE):
     else:
         splitter = GroupKFold(n_splits=n_folds)
         split_iter = splitter.split(df_search, groups=groups)
-
     return [
         (df_search.iloc[tr]["sid"].unique().tolist(),
          df_search.iloc[va]["sid"].unique().tolist())
@@ -277,103 +254,223 @@ def make_folds(df_search, severity, n_folds, random_state=RANDOM_STATE):
 
 
 # --------------------------------------------------------------------------
-# Evaluation
+# Stage fits (the semantics of TwoStageXGBoost.train_and_predict, split so
+# the two stages can be fitted and reused independently)
 # --------------------------------------------------------------------------
-def evaluate_predictions(df_pred, target_name=TARGET_NAME, return_grouped=False):
-    """Metrics at ADM1 level, where impact is actually reported.
+def fit_stage1(df_train, features, clf_params, u1):
+    """Classifier fitted on the u1-rebalanced training set."""
+    df_train = df_train.copy()
+    df_train["reported_bin"] = (df_train[TARGET_NAME] > 0).astype(int)
+    n_minority = int(df_train["reported_bin"].sum())
+    n_majority = int((df_train["reported_bin"] == 0).sum())
+    balanced = TwoStageXGBoost.oversample(df_train, target="reported_bin", u=u1)
+    clf = XGBClassifier(**clf_params)
+    clf.fit(balanced[features], balanced["reported_bin"])
+    return clf, u1 * n_minority > n_majority
 
-    Grid-cell percentages are converted to people, summed per (event, GID_1),
-    and turned back into a percentage of that unit's population before being
-    binned. Both the "affected at all" and "high impact" thresholds are scored.
+
+def fit_stage2(df_train, features, reg_params, u2):
+    """Regressor fitted on observed positives, u2-rebalanced - threshold-free."""
+    df_high = df_train[df_train[TARGET_NAME] > 0].copy()
+    # Strictly > 15, matching the paper's category definition.
+    df_high["impact_high"] = (df_high[TARGET_NAME] > IMPACT_THRESHOLD_HIGH).astype(int)
+    n_minority = int(df_high["impact_high"].sum())
+    n_majority = int((df_high["impact_high"] == 0).sum())
+    balanced = TwoStageXGBoost.oversample(df_high, target="impact_high", u=u2)
+    reg = XGBRegressor(**reg_params)
+    reg.fit(balanced[features], balanced[TARGET_NAME])
+    return reg, u2 * n_minority > n_majority
+
+
+# --------------------------------------------------------------------------
+# Threshold-sweep evaluation
+# --------------------------------------------------------------------------
+# For one fitted candidate, predictions at every threshold share the same
+# probabilities and the same stage-2 estimates; only the gate moves. Each test
+# cell is binned by the highest threshold it clears, the stage-2
+# people-estimates are summed per (ADM1 unit, bin) once, and a reverse
+# cumulative sum over bins yields every threshold's ADM1 totals from that one
+# groupby. Scoring all |CLF_THRESHOLDS| cutoffs therefore costs one
+# aggregation, not one model fit each.
+
+ADM1_KEYS = ["DisNo.", "GID_0", "GID_1"]
+
+
+def oof_frame(df_test, proba, reg_pred):
+    """The per-cell quantities every threshold shares, deduplicated per cell."""
+    out = df_test[ADM1_KEYS + ["id", "population", TARGET_NAME]].copy()
+    out["proba"] = np.asarray(proba, dtype="float64")
+    out["ppl_reg"] = np.clip(np.asarray(reg_pred, dtype="float64"), 0, 100) * out["population"] / 100.0
+    return out.drop_duplicates(subset=["DisNo.", "id"])
+
+
+def score_thresholds(cells, thresholds=CLF_THRESHOLDS):
+    """ADM1-level metrics at every stage-1 cutoff, from one aggregation.
+
+    Returns a list (one dict per threshold) with precision/recall/F1 at the
+    0% and 15% impact thresholds plus MAE and the pair count.
     """
-    # Shared with the post-training evaluation, so the metric a configuration
-    # is selected on is computed exactly as the reported one.
-    grouped = aggregate_predictions_to_adm1(df_pred, target_name=target_name)
+    thresholds = np.asarray(thresholds, dtype="float64")
+    # bin b: the cell clears thresholds[k] exactly for k < b
+    cells = cells.assign(_bin=np.searchsorted(thresholds, cells["proba"].to_numpy(), side="right"))
 
-    if grouped.empty:
-        empty = {"mae": float("nan"), "n_adm1": 0}
-        for suffix in ("", "_high"):
-            empty.update({f"precision{suffix}": 0.0, f"recall{suffix}": 0.0, f"f1{suffix}": 0.0})
-        return (empty, grouped) if return_grouped else empty
-
-    grouped["reported_cat"] = categorise(grouped["reported"])
-    grouped["predicted_cat"] = categorise(grouped["predicted"])
-
-    metrics = {
-        "mae": mean_absolute_error(grouped["reported"], grouped["predicted"]),
-        "n_adm1": len(grouped),
-    }
-    for suffix, cutoff in [("", 1), ("_high", 2)]:
-        y_true = (grouped["reported_cat"] >= cutoff).astype(int)
-        y_pred = (grouped["predicted_cat"] >= cutoff).astype(int)
-        metrics[f"precision{suffix}"] = precision_score(y_true, y_pred, zero_division=0)
-        metrics[f"recall{suffix}"] = recall_score(y_true, y_pred, zero_division=0)
-        metrics[f"f1{suffix}"] = f1_score(y_true, y_pred, zero_division=0)
-    return (metrics, grouped) if return_grouped else metrics
-
-
-def run_two_stage(df_all, features, train_events, test_events, cand, nthread=1):
-    """One fit/predict of the production model under one candidate configuration."""
-    clf_params, reg_params = xgb_params_from_candidate(cand, nthread=nthread)
-    model = TwoStageXGBoost(
-        clf_params=clf_params, reg_params=reg_params, features=features,
-        target_name=TARGET_NAME, u1=int(cand["u1"]), u2=int(cand["u2"]),
-        clf_threshold=float(cand["clf_threshold"]),
-        use_tuned=False,  # never let a previously-saved file leak into the search
+    grouped = (
+        cells.groupby(ADM1_KEYS, observed=True)
+        .agg(population=("population", "sum"), actual_perc=(TARGET_NAME, "max"))
     )
-    df_train = df_all[df_all["sid"].isin(train_events)]
-    df_test = df_all[df_all["sid"].isin(test_events)]
-    # A physical cyclone must never sit on both sides of a fold.
+    grouped = grouped[grouped["population"] > 0]
+    by_bin = (
+        cells.groupby(ADM1_KEYS + ["_bin"], observed=True)["ppl_reg"].sum()
+        .unstack("_bin", fill_value=0.0)
+        .reindex(columns=range(len(thresholds) + 1), fill_value=0.0)
+        .reindex(grouped.index, fill_value=0.0)
+    )
+    # Threshold k admits bins > k: a reverse cumulative sum, dropping bin 0.
+    ppl = by_bin.to_numpy()[:, ::-1].cumsum(axis=1)[:, ::-1][:, 1:]  # (n_adm1, K)
+
+    population = grouped["population"].to_numpy()[:, None]
+    predicted = np.clip(100.0 * ppl / population, 0, 100)            # (n_adm1, K)
+    reported = np.clip(grouped["actual_perc"].to_numpy(), 0, 100)
+
+    results = []
+    for k, threshold in enumerate(thresholds):
+        row = {"clf_threshold": float(threshold), "n_adm1": int(len(grouped)),
+               "mae": float(np.abs(reported - predicted[:, k]).mean())}
+        for suffix, cut in (("", IMPACT_THRESHOLD_LOW), ("_high", IMPACT_THRESHOLD_HIGH)):
+            y_true = reported > cut
+            y_pred = predicted[:, k] > cut
+            tp = int(np.sum(y_true & y_pred))
+            fp = int(np.sum(~y_true & y_pred))
+            fn = int(np.sum(y_true & ~y_pred))
+            precision = tp / (tp + fp) if tp + fp else 0.0
+            recall = tp / (tp + fn) if tp + fn else 0.0
+            f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+            row[f"precision{suffix}"] = precision
+            row[f"recall{suffix}"] = recall
+            row[f"f1{suffix}"] = f1
+        results.append(row)
+    return results
+
+
+# --------------------------------------------------------------------------
+# Candidate evaluation
+# --------------------------------------------------------------------------
+def _fold_cells(df_search, features, fold, cand, nthread):
+    """Fit one candidate on one fold; return the per-cell OOF frame."""
+    train_sids, val_sids = fold
+    df_train = df_search[df_search["sid"].isin(train_sids)]
+    df_test = df_search[df_search["sid"].isin(val_sids)]
     assert not set(df_train["sid"].unique()) & set(df_test["sid"].unique())
-    return model.train_and_predict(df_train, df_test)
+    clf_params, reg_params = xgb_params_from_candidate(cand, nthread)
+    clf, sat1 = fit_stage1(df_train, features, clf_params, int(cand["u1"]))
+    reg, sat2 = fit_stage2(df_train, features, reg_params, int(cand["u2"]))
+    cells = oof_frame(df_test, clf.predict_proba(df_test[features])[:, 1],
+                      reg.predict(df_test[features]))
+    return cells, sat1, sat2
 
 
-def score_candidate(cand, df_search, folds, features, nthread=1):
-    """Pooled out-of-fold metrics for one candidate."""
-    oof = []
-    for train_events, val_events in folds:
-        try:
-            oof.append(run_two_stage(df_search, features, train_events, val_events, cand, nthread))
-        except Exception as e:  # a candidate that cannot fit should not kill the search
-            logging.warning(f"candidate failed on a fold ({e}); scoring it as 0")
-            return {**cand, "mae": float("nan"), "f1": 0.0, "f1_high": 0.0,
-                    "precision": 0.0, "recall": 0.0, "precision_high": 0.0,
-                    "recall_high": 0.0, "n_adm1": 0, "failed": True}
-    metrics = evaluate_predictions(pd.concat(oof, axis=0))
-    return {**cand, **metrics, "failed": False}
+def score_candidate(cand, df_search, folds, features, select_on, nthread=1):
+    """Pooled out-of-fold metrics for one candidate, at its best threshold."""
+    try:
+        parts = [_fold_cells(df_search, features, fold, cand, nthread) for fold in folds]
+    except Exception as e:  # a candidate that cannot fit should not kill the search
+        logging.warning(f"candidate failed on a fold ({e}); scoring it as 0")
+        return {**cand, "clf_threshold": np.nan, select_on: 0.0, "failed": True}, []
+    cells = pd.concat([p[0] for p in parts], ignore_index=True)
+    curve = score_thresholds(cells)
+    best = max(curve, key=lambda row: row[select_on])
+    saturated = {"u1_saturated": any(p[1] for p in parts),
+                 "u2_saturated": any(p[2] for p in parts)}
+    return {**cand, **best, **saturated, "failed": False}, curve
+
+
+# --------------------------------------------------------------------------
+# The ratios grid, factorized: u1 touches only stage 1 and u2 only stage 2,
+# so each fold fits |U| classifiers and |U| regressors (not |U|^2 pairs) and
+# every (u1, u2) combination is assembled from stored predictions.
+# --------------------------------------------------------------------------
+def ratios_grid(df_search, folds, features, clf_params, reg_params, select_on,
+                u_values=U_VALUES, n_jobs=1, nthread=1):
+    clf_params = {**clf_params, "nthread": nthread}
+    reg_params = {**reg_params, "nthread": nthread}
+
+    def one_fit(fold_idx, stage, u):
+        train_sids, val_sids = folds[fold_idx]
+        df_train = df_search[df_search["sid"].isin(train_sids)]
+        df_test = df_search[df_search["sid"].isin(val_sids)]
+        if stage == "clf":
+            model, saturated = fit_stage1(df_train, features, clf_params, u)
+            pred = model.predict_proba(df_test[features])[:, 1]
+        else:
+            model, saturated = fit_stage2(df_train, features, reg_params, u)
+            pred = model.predict(df_test[features])
+        return (fold_idx, stage, u), (pred, saturated)
+
+    jobs = [(i, stage, u) for i in range(len(folds)) for stage in ("clf", "reg") for u in u_values]
+    logging.info(f"ratios grid: {len(jobs)} stage fits "
+                 f"({len(folds)} folds x 2 stages x {len(u_values)} ratios) cover "
+                 f"{len(u_values) ** 2} (u1, u2) combinations x {len(CLF_THRESHOLDS)} thresholds")
+    fitted = dict(Parallel(n_jobs=n_jobs)(delayed(one_fit)(*job) for job in jobs))
+
+    test_frames = [df_search[df_search["sid"].isin(folds[i][1])] for i in range(len(folds))]
+    results, curves = [], {}
+    for u1 in u_values:
+        for u2 in u_values:
+            cells = pd.concat([
+                oof_frame(test_frames[i],
+                          fitted[(i, "clf", u1)][0], fitted[(i, "reg", u2)][0])
+                for i in range(len(folds))
+            ], ignore_index=True)
+            curve = score_thresholds(cells)
+            best = max(curve, key=lambda row: row[select_on])
+            results.append({
+                **candidate_from_params(clf_params, reg_params), "u1": u1, "u2": u2, **best,
+                "u1_saturated": any(fitted[(i, "clf", u1)][1] for i in range(len(folds))),
+                "u2_saturated": any(fitted[(i, "reg", u2)][1] for i in range(len(folds))),
+                "failed": False,
+            })
+            curves[(u1, u2)] = curve
+    return results, curves
 
 
 # --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
-def build_candidates(search, n_iter, random_state=RANDOM_STATE):
-    if search == "grid":
-        candidates = [{**GRID_DEFAULTS, **c} for c in ParameterGrid(PARAM_GRID_SMALL)]
-        logging.info(f"exhaustive grid over {len(PARAM_GRID_SMALL)} dimensions: {len(candidates)} candidates")
-        return candidates
-    candidates = list(ParameterSampler(PARAM_SPACE, n_iter=n_iter, random_state=random_state))
-    logging.info(f"random search over {len(PARAM_SPACE)} dimensions: {len(candidates)} candidates")
-    return candidates
-
-
 MIN_EVENTS = 6  # below this, grouped folds cannot be formed meaningfully
+
+
+def frozen_tree_params(args):
+    """Tree parameters for --search ratios: an earlier winner's, or the defaults."""
+    source = args.from_json or HYPERPARAMETERS_PATH
+    try:
+        with open(source) as f:
+            tuned = json.load(f)
+        clf_params = dict(tuned["clf_params"])
+        reg_params = dict(tuned["reg_params"])
+        logging.info(f"ratios grid uses the tree parameters from {source}")
+    except (FileNotFoundError, KeyError, json.JSONDecodeError):
+        clf_params = TwoStageXGBoost._default_clf_params()
+        reg_params = TwoStageXGBoost._default_reg_params()
+        logging.info(f"no usable tree parameters at {source}; ratios grid uses the built-in defaults")
+    for params in (clf_params, reg_params):
+        params.pop("nthread", None)
+    return clf_params, reg_params
 
 
 def main(args):
     df = load_dataset(args.input)
     severity = event_severity_labels(df)
 
-    n_events_available = df["sid"].nunique()
-    if n_events_available < MIN_EVENTS:
+    if df["sid"].nunique() < MIN_EVENTS:
         logging.error(
-            f"only {n_events_available} events available; at least {MIN_EVENTS} are needed to "
-            f"form event-grouped folds and a held-out set. Point --input at the full dataset."
+            f"only {df['sid'].nunique()} cyclones available; at least {MIN_EVENTS} are needed "
+            f"to form grouped folds and a held-out set. Point --input at the full dataset."
         )
         return 1
 
     search_events, holdout_events = split_events(
         df, severity, args.n_events, args.test_fraction, args.random_state)
-    logging.info(f"search pool: {len(search_events)} events | held-out: {len(holdout_events)} events")
+    logging.info(f"search pool: {len(search_events)} cyclones | held-out: {len(holdout_events)} cyclones")
 
     df_search = df[df["sid"].isin(search_events)].copy()
     df_holdout = df[df["sid"].isin(holdout_events)].copy()
@@ -381,73 +478,100 @@ def main(args):
     n_folds = min(args.n_folds, max(2, len(search_events)))
     folds = make_folds(df_search, severity, n_folds, args.random_state)
     for i, (tr, va) in enumerate(folds):
-        logging.info(f"  fold {i}: {len(tr)} train events, {len(va)} val events")
+        logging.info(f"  fold {i}: {len(tr)} train cyclones, {len(va)} val cyclones")
 
-    candidates = build_candidates(args.search, args.n_iter, args.random_state)
-    logging.info(f"{len(candidates)} candidates x {len(folds)} folds = "
-                 f"{len(candidates) * len(folds)} two-stage fits")
+    if args.search == "ratios":
+        clf_params, reg_params = frozen_tree_params(args)
+        results, curves = ratios_grid(
+            df_search, folds, FEATURES, clf_params, reg_params, args.select_on,
+            n_jobs=args.n_jobs, nthread=args.nthread)
+    else:
+        candidates = list(ParameterSampler(PARAM_SPACE, n_iter=args.n_iter,
+                                           random_state=args.random_state))
+        logging.info(f"random search: {len(candidates)} candidates x {len(folds)} folds "
+                     f"= {len(candidates) * len(folds)} two-stage fits; "
+                     f"{len(CLF_THRESHOLDS)} thresholds scored per candidate for free")
+        scored = Parallel(n_jobs=args.n_jobs)(
+            delayed(score_candidate)(c, df_search, folds, FEATURES, args.select_on, args.nthread)
+            for c in candidates
+        )
+        results = [row for row, _ in scored]
+        curves = {i: curve for i, (_, curve) in enumerate(scored)}
 
-    results = Parallel(n_jobs=args.n_jobs)(
-        delayed(score_candidate)(c, df_search, folds, FEATURES, args.nthread) for c in candidates
-    )
-    results_df = pd.DataFrame(results).sort_values(args.select_on, ascending=False).reset_index(drop=True)
-
+    results_df = pd.DataFrame(results).sort_values(args.select_on, ascending=False)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     results_path = args.output.with_name(args.output.stem + "_search_results.csv")
     results_df.to_csv(results_path, index=False)
-    logging.info(f"all candidate scores -> {results_path}")
+    logging.info(f"all candidate scores (each at its best threshold) -> {results_path}")
 
-    if results_df["failed"].all():
+    if results_df.empty or results_df["failed"].all():
         logging.error("every candidate failed; nothing written")
         return 1
 
-    param_keys = list(PARAM_SPACE.keys())
+    top = results_df.head(5)
+    logging.info("top candidates by %s (selection noise check):\n%s", args.select_on,
+                 top[["u1", "u2", "clf_threshold", args.select_on]].to_string(index=False))
+
     best = results_df.iloc[0]
+    best_key = best.name  # original candidate index / (u1, u2) lookup key
+    param_keys = list(PARAM_SPACE.keys())
     best_cand = {k: best[k] for k in param_keys if k in results_df.columns}
     for k in ("clf_max_depth", "clf_min_child_weight", "clf_n_estimators",
               "reg_max_depth", "reg_min_child_weight", "reg_n_estimators", "u1", "u2"):
         if k in best_cand:
             best_cand[k] = int(best_cand[k])
-    best_cand["clf_threshold"] = float(best_cand["clf_threshold"])
+    selected_threshold = float(best["clf_threshold"])
+    logging.info(f"best candidate by {args.select_on} (threshold {selected_threshold}):\n"
+                 f"{json.dumps(best_cand, indent=2, default=str)}")
 
-    logging.info(f"best candidate by {args.select_on}:\n{json.dumps(best_cand, indent=2, default=str)}")
-
-    # The held-out events have not influenced anything above; this is the only
-    # time they are used, and the resulting number is the one worth quoting.
-    holdout_pred = run_two_stage(
-        pd.concat([df_search, df_holdout], axis=0), FEATURES,
-        search_events, holdout_events, best_cand, nthread=args.nthread or 0,
-    )
-    holdout_metrics = evaluate_predictions(holdout_pred)
-    logging.info(f"held-out metrics (evaluated once):\n{json.dumps(holdout_metrics, indent=2, default=str)}")
-
+    # The held-out cyclones have influenced nothing above. They are fitted and
+    # scored once; the quotable number is the one at the selected threshold,
+    # and the full curve is kept for the response-surface figure.
     clf_params, reg_params = xgb_params_from_candidate(best_cand, nthread=args.nthread or 0)
+    df_train = df_search
+    df_test = df_holdout
+    clf, _ = fit_stage1(df_train, FEATURES, clf_params, best_cand["u1"])
+    reg, _ = fit_stage2(df_train, FEATURES, reg_params, best_cand["u2"])
+    holdout_curve = score_thresholds(
+        oof_frame(df_test, clf.predict_proba(df_test[FEATURES])[:, 1],
+                  reg.predict(df_test[FEATURES])))
+    holdout_metrics = next(row for row in holdout_curve
+                           if row["clf_threshold"] == selected_threshold)
+    logging.info(f"held-out metrics at the selected threshold (evaluated once):\n"
+                 f"{json.dumps(holdout_metrics, indent=2, default=str)}")
+
+    cv_curve = (curves[(best_cand["u1"], best_cand["u2"])]
+                if args.search == "ratios" else curves[int(best_key)])
     payload = {
         "clf_params": clf_params,
         "reg_params": reg_params,
         "u1": best_cand["u1"],
         "u2": best_cand["u2"],
-        "clf_threshold": best_cand["clf_threshold"],
+        "clf_threshold": selected_threshold,
         "candidate": best_cand,
         "selected_on": args.select_on,
         "cv_metrics": {k: (None if pd.isna(best[k]) else float(best[k]))
                        for k in ("mae", "precision", "recall", "f1",
                                  "precision_high", "recall_high", "f1_high", "n_adm1")
                        if k in results_df.columns},
-        "holdout_metrics": {k: (None if pd.isna(v) else float(v)) for k, v in holdout_metrics.items()},
+        "cv_threshold_curve": cv_curve,
+        "holdout_metrics": holdout_metrics,
+        "holdout_threshold_curve": holdout_curve,
+        "top_candidates": top.to_dict(orient="records"),
         "search": {
-            "input": str(args.input), "search": args.search, "n_candidates": len(candidates),
+            "input": str(args.input), "search": args.search,
+            "n_candidates": int(len(results_df)),
             "n_events": len(search_events) + len(holdout_events),
             "n_search_events": len(search_events), "n_holdout_events": len(holdout_events),
             "n_folds": len(folds), "random_state": args.random_state,
             "group_col": "sid",
+            "clf_thresholds": list(CLF_THRESHOLDS),
             "search_events": sorted(map(str, search_events)),
             "holdout_events": sorted(map(str, holdout_events)),
         },
     }
     with open(args.output, "w") as f:
-        # numpy scalars (e.g. an all-integer gamma column) are not JSON
-        # serializable; .item() converts them to their Python equivalents.
+        # numpy scalars are not JSON serializable; .item() converts them.
         json.dump(payload, f, indent=2,
                   default=lambda o: o.item() if hasattr(o, "item") else str(o))
     logging.info(f"chosen hyperparameters -> {args.output} (picked up automatically by TwoStageXGBoost)")
@@ -462,24 +586,28 @@ def parse_args(argv=None):
                    help="model input parquet (default: the pipeline's own output)")
     p.add_argument("--output", type=Path, default=HYPERPARAMETERS_PATH,
                    help="where to write the chosen hyperparameters JSON")
-    p.add_argument("--search", choices=["random", "grid"], default="random",
-                   help="random search over the full space (default) or an exhaustive small grid")
+    p.add_argument("--search", choices=["random", "ratios"], default="random",
+                   help="random search over tree parameters and ratios (default), or an "
+                        "exhaustive, factorized u1 x u2 grid with the tree parameters "
+                        "frozen (--from-json, else the tuned JSON, else the defaults)")
+    p.add_argument("--from-json", type=Path, default=None,
+                   help="for --search ratios: JSON whose clf_params/reg_params are frozen")
     p.add_argument("--n-iter", type=int, default=80, help="random-search candidates")
     p.add_argument("--n-events", type=int, default=200,
-                   help="events sampled for the whole search; 0 uses all of them")
+                   help="cyclones sampled for the whole search; 0 uses all of them")
     p.add_argument("--test-fraction", type=float, default=0.2,
-                   help="fraction of sampled events held out and scored once")
-    p.add_argument("--n-folds", type=int, default=5, help="event-grouped CV folds")
-    p.add_argument("--n-jobs", type=int, default=4, help="candidates evaluated in parallel")
+                   help="fraction of sampled cyclones held out and scored once")
+    p.add_argument("--n-folds", type=int, default=5, help="cyclone-grouped CV folds")
+    p.add_argument("--n-jobs", type=int, default=4, help="parallel workers (joblib)")
     p.add_argument("--nthread", type=int, default=1,
                    help="xgboost threads per fit; keep n_jobs * nthread <= cores")
     p.add_argument("--select-on", default="f1_high",
-                   help="metric that decides the winner (pre-specify it; do not eyeball several). "
-                        "Default f1_high: ADM1-level F1 at the 15%% threshold, the selection "
-                        "objective reported in the paper.")
+                   help="metric that decides the winner (pre-specify it; do not eyeball "
+                        "several). Default f1_high: ADM1-level F1 at the 15%% threshold, "
+                        "the selection objective reported in the paper.")
     p.add_argument("--random-state", type=int, default=RANDOM_STATE)
     p.add_argument("--dry-run", action="store_true",
-                   help="tiny budget for a smoke test: 2 candidates, 2 folds, 20 events")
+                   help="tiny budget for a smoke test: 2 candidates, 2 folds, 20 cyclones")
     args = p.parse_args(argv)
     if args.dry_run:
         args.n_iter, args.n_folds, args.n_events, args.n_jobs = 2, 2, 20, 1
