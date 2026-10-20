@@ -134,12 +134,20 @@ def prepare_data(aggregate_to_adm1=False):
 
 
 def execute_training_run(model_name, strategy, aggregate_to_adm1=False,
-                         event_col="DisNo.", recompute=False,
-                         features=None, run_name=None):
+                         event_col="sid", recompute=False,
+                         features=None, run_name=None, use_tuned=True):
     """Orchestrates the data prep and LOOCV execution for a specific model and strategy.
 
-    `event_col` is the LOOCV grouping unit: "DisNo." (the paper's country-event
-    record, default) or "sid" (the physical cyclone -- see run_loocv_pipeline).
+    `event_col` is the LOOCV grouping unit: "sid" (the physical cyclone --
+    default, matching the revised manuscript, the hyperparameter search and
+    the bootstrap) or "DisNo." (the round-1 country-event record, kept as an
+    explicit option so the old grouping can be reproduced for the response
+    letter's before/after comparison).
+
+    `use_tuned=False` ignores data/model_hyperparameters.json and runs the
+    built-in (round-1) fixed configuration -- the attribution runs in
+    RERUN_CHECKLIST.md use it to separate "re-tuned model" from "corrected
+    evaluation" when explaining why headline metrics moved.
 
     `features` fits the model on a subset of FEATURES, for an ablation; the
     omitted ones are still loaded, since the target and the fold keys travel
@@ -187,7 +195,7 @@ def execute_training_run(model_name, strategy, aggregate_to_adm1=False,
     elif model_name == "windspeed-historical":
         model = WindspeedHistoricalModel()
     elif model_name == "2-stage-XGBoost":
-        model = TwoStageXGBoost(features=list(features or FEATURES))
+        model = TwoStageXGBoost(features=list(features or FEATURES), use_tuned=use_tuned)
     else:
         raise ValueError(
             f"Unknown model_name: {model_name}. Allowed: 'historical', "
@@ -202,7 +210,7 @@ def execute_training_run(model_name, strategy, aggregate_to_adm1=False,
     output_folder = f"model_output/{model_name}_{strategy}_{level_str}"
     if run_name:
         output_folder += f"_{run_name}"
-    if event_col != "DisNo.":
+    if event_col != "sid":
         # Keep non-default grouping in its own directory: fold filenames are
         # built from the grouping key, so mixing them would corrupt the
         # resume check and the compiled predictions file.

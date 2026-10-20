@@ -68,7 +68,7 @@ def compute_distance_metrics(models_dict, target_col="perc_affected_pop_grid_reg
     return pd.DataFrame(results)
 
 def load_and_evaluate_all_models(level="adm1", strategy="global",
-                                 bootstrap=False, n_boot=1000, event_col="DisNo.",
+                                 bootstrap=False, n_boot=1000, event_col="sid",
                                  random_state=42):
     """
     Loads model outputs from OUTPUT_DIR and computes standard tables.
@@ -144,7 +144,7 @@ if __name__ == "__main__":
     parser.add_argument("--bootstrap", action="store_true",
                         help="add event-level bootstrap confidence intervals")
     parser.add_argument("--n-boot", type=int, default=1000)
-    parser.add_argument("--event-col", default="DisNo.",
+    parser.add_argument("--event-col", default="sid",
                         help="unit resampled by the bootstrap (a cyclone/event, not a row)")
     args = parser.parse_args()
 

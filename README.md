@@ -6,7 +6,14 @@ The core of this project is the **Data Factory**, which automates the collection
 
 ---
 
-## 📂 Repository Structure
+## Citation
+
+If you use this repository or the generated dataset in your research, please cite:
+> *Moss, F et al. Global Sub-national Impact-based Forecasting for Tropical Cyclones Using Open Data: Combining Machine Learning and Exposure-based Approaches, EGUsphere (2026). doi: 10.5194/egusphere-2026-1996 (under review).*
+
+---
+
+## Repository Structure
 
 ```text
 ├── data/
@@ -16,10 +23,10 @@ The core of this project is the **Data Factory**, which automates the collection
 │   ├── collectors/           # Data acquisition (general_collector.py, pps_collector.py)
 │   ├── static_features/      # Spatial Processing (grid_cells.py, process_gadm.py, etc.)
 │   ├── dynamic_features/     # Event-Based Processing (process_emdat.py, process_wind.py, etc.)
-│   ├── evaluation/           # Metrics & event-level bootstrap CIs (bootstrap.py)
 │   ├── models/               # Two-Stage XGBoost & Baselines (train.py)
-│   ├── evaluation/           # LOOCV Pipeline & Metrics
+│   ├── evaluation/           # LOOCV (cv_strategies.py), metrics & bootstrap CIs (bootstrap.py)
 │   ├── interpretability/     # SHAP Analysis & Visualization
+│   ├── utils/                # Shared helpers (geo_utils, logging_setup, time interpolation)
 │   ├── config.py             # Global constants, URLs, and ISO3 List
 │   └── dataset_builder.py    # Master script to compile the final Parquet
 ├── test/                     # Hyperparameter search (hyperparameter_search.py)
@@ -30,7 +37,7 @@ The core of this project is the **Data Factory**, which automates the collection
 
 ---
 
-## 🛠 Prerequisites & Data Preparation
+## Prerequisites & Data Preparation
 
 ### 1. System Dependencies
 The pipeline relies on several low-level geospatial libraries for raster processing and atmospheric data handling:
@@ -47,7 +54,7 @@ The pipeline relies on several low-level geospatial libraries for raster process
     * **Windows:** Use the [OSGeo4W installer](https://trac.osgeo.org/osgeo4w/) or install via Conda: `conda install -c conda-forge gdal`.
     * **No root (shared servers/HPC):** `conda install -c conda-forge gdal` works everywhere, not just on Windows, and has the advantage that `libgdal` and the binaries are version-matched inside the environment.
 
-> ⚠️ **`gdaldem` must be on `PATH`, not merely installed.** The terrain step shells
+> **`gdaldem` must be on `PATH`, not merely installed.** The terrain step shells
 > out to the `gdaldem` binary (`subprocess.run(["gdaldem", ...])`), which is a
 > `PATH` lookup — unlike everything else here, which only needs importable Python
 > packages. Calling the environment's interpreter by absolute path
@@ -117,13 +124,13 @@ pip install --retries 15 --timeout 90 -r requirements.txt
 
     The two agree to **correlation 0.9994** (median relative difference 0.17%, verified over 576k pixels); above 75 mm/day they are effectively identical (±0.6%), while below ~25 mm the daily route's 2.4 mm quantisation shows (±6%). Use `half_hourly` when light-rain precision matters and `daily` when download volume does — the whole 2000–2022 record is ~2.8 GB as daily granules against ~90 GB as half-hourly ones.
 
-    > ⚠️ **The two products are not interchangeable without their conversion.** The daily granule stores a *rate*, so using it as if it were an accumulation under-counts rainfall by a factor of 24. Each product therefore has its own conversion function in `process_rain_features.py` (`half_hour_raw_to_mm`, `daily_raw_to_mm`) and they are never mixed. Both report short days rather than silently summing a partial one, since the feature is a maximum over days and an incomplete day can only bias it downward.
+    > **The two products are not interchangeable without their conversion.** The daily granule stores a *rate*, so using it as if it were an accumulation under-counts rainfall by a factor of 24. Each product therefore has its own conversion function in `process_rain_features.py` (`half_hour_raw_to_mm`, `daily_raw_to_mm`) and they are never mixed. Both report short days rather than silently summing a partial one, since the feature is a maximum over days and an incomplete day can only bias it downward.
 
 * **SHDI Index (Vulnerability)**: Download this dataset manually from *https://globaldatalab.org/shdi/download/shdi/* and put it in under `/data/SHDI/GDL-Subnational-HDI-data.csv` (requires logging to GlobalDataLab)
 
 ---
 
-## 🚀 Execution Workflow
+## Execution Workflow
 
 The `main.py` script manages the end-to-end workflow. By default, it operates as a Data Factory.
 
@@ -132,6 +139,7 @@ Downloads all public data, initializes the 0.1° grid, processes all 16 features
 ```bash
 python main.py
 ```
+The scope is **global by default** (`ISO3_LIST = None` in `src/config.py`; Antarctica excluded); set `ISO3_LIST` to a short country list there to test the plumbing cheaply. Data lives under `./data/` unless overridden with `TC_IMPACT_DATA_DIR` (or `TC_IMPACT_INPUT_DIR` / `TC_IMPACT_OUTPUT_DIR` individually) — useful when the raw downloads should sit on a large scratch disk.
 
 ### 2. Partial Execution (By Stage)
 Use the `--stage` flag to execute or re-run specific parts of the pipeline:
@@ -150,7 +158,7 @@ python main.py --stage static
 #    default 48-per-day half-hourly ones (same feature, ~50x less download).
 python main.py --stage dynamic
 
-# 5. Assembly the final training_dataset.parquet
+# 5. Assemble the final training_dataset.parquet
 python main.py --stage build
 ```
 
@@ -176,7 +184,7 @@ Three properties are worth knowing, because they decide whether the reported num
 
 The winner is written to `data/model_hyperparameters.json` and **loaded automatically** by `TwoStageXGBoost` — no copying numbers by hand. If the file is absent the model falls back to its built-in defaults, so a fresh clone still runs; explicit constructor arguments always win over the file. Override the location with `TC_IMPACT_HYPERPARAMETERS`.
 
-> The development subset in `ISO3_LIST` (ATG/FJI/HTI) is far too small for a search — every event fails the selection filters. Point `--input` at the full dataset.
+> If you restricted `ISO3_LIST` to a small development subset while testing, point `--input` at a full dataset for the search — a handful of countries leaves too few events, and every one fails the selection filters.
 
 ### 4. Validation Metrics with Confidence Intervals
 ```bash
@@ -187,13 +195,13 @@ python -m src.evaluation.metrics
 python -m src.evaluation.metrics --bootstrap --n-boot 1000
 ```
 
-`src/evaluation/bootstrap.py` attaches nonparametric 95% CIs to every validation metric by resampling **whole cyclones**, not ADM1 rows. That distinction is what makes the intervals meaningful: ADM1 rows from one storm share a hazard field and a single EM-DAT report, so they are not independent observations — resampling rows treats correlated data as independent and yields intervals that are far too narrow. On representative data the event-level interval comes out roughly **1.8× wider** than a row-level one, and the wider number is the honest one.
+`src/evaluation/bootstrap.py` attaches nonparametric 95% CIs to every validation metric by resampling **whole cyclones** (`--event-col` defaults to `sid`; pass `--event-col "DisNo."` only to reproduce the round-1 country-event unit), not ADM1 rows. That distinction is what makes the intervals meaningful: ADM1 rows from one storm share a hazard field and a single EM-DAT report, so they are not independent observations — resampling rows treats correlated data as independent and yields intervals that are far too narrow. On representative data the event-level interval comes out roughly **1.8× wider** than a row-level one, and the wider number is the honest one.
 
 Undefined metrics are treated differently in the point estimate and in the replicates, on purpose: the point estimate scores an undefined ratio as 0.0 (matching `sklearn`'s `zero_division=0`, so headline numbers stay conventional), while a replicate where the metric is undefined is excluded from the percentile and counted in `<metric>_n_undefined_boot`. Check that column before quoting an interval — one built on few valid replicates says little. Intervals are percentile-method, so not bias- or skew-corrected (no BCa).
 
 ### 5. Model Training & Interpretability
 ```bash
-# Run 2-Stage XGBoost with Leave-One-Event-Out Cross-Validation (LOOCV)
+# Run 2-Stage XGBoost with Leave-One-Cyclone-Out Cross-Validation (LOOCV)
 # Uses data/model_hyperparameters.json when present, defaults otherwise.
 python main.py --run-models
 
@@ -201,24 +209,26 @@ python main.py --run-models
 python main.py --run-interpretability
 ```
 
+The LOOCV unit is the **physical cyclone (IBTrACS `sid`)**: a storm that hits several countries leaves the training set as a whole. The round-1 grouping by EM-DAT country-event record remains available for comparison — call `execute_training_run(..., event_col="DisNo.")`; its outputs land in a separate `..._by_DisNo.` directory so the two never mix.
+
 ---
 
-## 📊 Feature Dictionary
+## Feature Dictionary
 
 The pipeline engineers the following features for every 0.1° grid cell:
 
 | Category | Features | Data Source |
 | :--- | :--- | :--- |
 | **Physical Hazard** | Max Wind Speed, 24h Max Rainfall, Storm Surge, Flood Risk | IBTrACS, NASA PPS, COAST-RP, GLOFAS |
-| **Exposure** | Total Population (Grid-level) | WorldPop (2020 UN-Adjusted) |
-| **Vulnerability** | Urban/Rural/Water Proportions, SHDI (Subnational HDI) | JRC (GHSL), Global Data Lab |
+| **Exposure** | Total Population (Grid-level), interpolated to the event year | WorldPop anchors 2000–2020 (post-2020 extrapolated) |
+| **Vulnerability** | Urban/Rural/Water Proportions (interpolated to the event year), SHDI (Subnational HDI) | GHSL SMOD epochs 2000–P2025, Global Data Lab |
 | **Terrain** | Elevation, Slope, Ruggedness | SRTM (CGIAR-CSI) |
 | **Geography** | Distance to Coast, Coastline Length, Landslide Risk | GADM, World Bank |
 | **History** | N Events in Last 5 Years | IBTrACS / EM-DAT |
 
 ---
 
-## 📝 Methodology Summary
+## Methodology Summary
 
 ### 1. Spatial Impact Expansion
 To accurately model sub-national variation, `process_emdat.py` parses reported administrative units from EM-DAT and expands them into a full country-event grid. Regions explicitly reported by EM-DAT receive the `Total Affected` value, while all other regions in the country are zero-filled. This creates a contrast baseline that allows the model to learn the specific spatial drivers of impact.
@@ -231,9 +241,3 @@ Because spatial impact data is heavily zero-inflated (many cells have no impact)
 ### 3. Model Interpretability
 Interpretability is provided via **SHAP (SHapley Additive exPlanations)**. This allows the model to move beyond "black box" predictions, quantifying how individual hazards (e.g., wind speed) interact with local vulnerability (e.g., SHDI) to drive the final affected population counts.
 
----
-
-## 🎓 Citation
-
-If you use this repository or the generated dataset in your research, please cite:
-> *Moss, F et al. Global Sub-national Impact-based Forecasting for Tropical Cyclones Using Open Data: Combining Machine Learning and Exposure-based Approaches, EGUsphere (2026). doi: 10.5194/egusphere-2026-1996 (under review).*
