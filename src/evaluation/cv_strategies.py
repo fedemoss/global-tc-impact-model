@@ -10,35 +10,32 @@ from src.config import OUTPUT_DIR
 logger = logging.getLogger(__name__)
 
 
-def _claim_output_folder(out_dir, strategy, event_col, exclude_col, recompute):
+def _claim_output_folder(out_dir, strategy, event_col, exclude_col):
     """Record how this folder's folds are defined, and refuse to mix two.
 
-    Fold filenames carry the predicted unit, so predictions made under a
-    different definition are not overwritten by a later run and are not caught
-    by the resume check -- they are simply picked up by the final concatenation.
-    Recording the definition turns that into an error instead.
+    Fold filenames carry the predicted unit alone, so predictions left by a run
+    that withheld a different unit are neither overwritten nor caught by the
+    resume check -- recompute included, since that only rewrites the filenames
+    the current definition produces. They are simply picked up by the final
+    concatenation. Recording the definition turns that into an error, which the
+    caller resolves by emptying the folder or naming another; the stale
+    predictions are a run's worth of compute, so they are never removed here.
     """
     marker = out_dir / "fold_config.json"
     current = {"strategy": strategy, "event_col": event_col,
                "exclude_col": exclude_col or event_col}
+    if not any(out_dir.glob("predictions_event_*.csv")):
+        marker.write_text(json.dumps(current, indent=2))
+        return
 
-    if marker.exists():
-        previous = json.loads(marker.read_text())
-        if previous != current and any(out_dir.glob("predictions_event_*.csv")):
-            raise ValueError(
-                f"{out_dir} holds predictions made with {previous}, which cannot "
-                f"be combined with {current}. Write the new run to another "
-                f"folder, or empty this one first."
-            )
-    elif any(out_dir.glob("predictions_event_*.csv")) and not recompute:
-        # Predictions predating this record, whose definition is unknown.
+    previous = json.loads(marker.read_text()) if marker.exists() else None
+    if previous != current:
         raise ValueError(
-            f"{out_dir} holds predictions from before the fold definition was "
-            f"recorded, so they cannot be shown to match {current}. Pass "
-            f"recompute=True to replace them, or empty the folder."
+            f"{out_dir} holds predictions made with "
+            f"{previous or 'an unrecorded fold definition'}, which cannot be "
+            f"combined with {current}. Empty or rename the folder, or send this "
+            f"run to another one."
         )
-
-    marker.write_text(json.dumps(current, indent=2))
 
 
 def _save_final_model(model, out_dir):
@@ -86,7 +83,7 @@ def run_loocv_pipeline(df, events, model, strategy="global", output_folder="looc
     """
     out_dir = OUTPUT_DIR / output_folder
     out_dir.mkdir(parents=True, exist_ok=True)
-    _claim_output_folder(out_dir, strategy, event_col, exclude_col, recompute)
+    _claim_output_folder(out_dir, strategy, event_col, exclude_col)
 
     widen = bool(exclude_col) and exclude_col != event_col
     if widen:
