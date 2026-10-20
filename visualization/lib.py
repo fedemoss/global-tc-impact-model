@@ -325,3 +325,170 @@ def load_variants(variants=None, level="adm1"):
         if df is not None:
             out[label] = df
     return out
+
+
+# --------------------------------------------------------------------------
+# Walk-forward against leave-one-out, over time
+# --------------------------------------------------------------------------
+COLOR_WALK_FORWARD = "#817F7D"
+COLOR_LOOCV = "#E24916"
+
+
+def attach_event_time(df):
+    """Add `year` and `month` from the EM-DAT record of each event."""
+    import pandas as pd
+
+    from src.config import INPUT_DIR
+
+    emdat = pd.read_csv(INPUT_DIR / "EMDAT" / "emdat.csv")
+    cols = ["DisNo.", "Start Year", "Start Month"]
+    ev = emdat[cols].drop_duplicates().rename(
+        columns={"Start Year": "year", "Start Month": "month"})
+    out = df.drop(columns=[c for c in ("year", "month") if c in df.columns])
+    out = out.merge(ev, on="DisNo.", how="left")
+    # an event the registry no longer carries still has its year in the id
+    missing = out["year"].isna()
+    if missing.any():
+        out.loc[missing, "year"] = (
+            out.loc[missing, "DisNo."].astype(str).str[:4].astype(float))
+    out["month"] = out["month"].fillna(1)
+    return out
+
+
+def rolling_metrics_with_bootstrap(df, event_col="sid", threshold=0,
+                                   resolution="month", window_size=5,
+                                   n_boot=30, ci=0.95, seed=None,
+                                   from_year=2000):
+    """Metrics over a trailing window, with intervals from resampling cyclones.
+
+    Each point covers the `window_size` years ending at it. Resampling is over
+    the cyclone rather than the row, since administrative units of one storm
+    share a hazard field and a single report.
+    """
+    import numpy as np
+    import pandas as pd
+    from sklearn.metrics import f1_score, precision_score, recall_score
+
+    rng = np.random.default_rng(seed)
+    df = df[df["year"] >= from_year].copy()
+    df["reported_bin"] = (df["reported"] > threshold).astype(int)
+    df["pred_bin"] = (df["predicted"] > threshold).astype(int)
+
+    year = df["year"].astype(int).astype(str)
+    if resolution == "year":
+        df["time_index"] = pd.to_datetime(year + "-01-01")
+    elif resolution == "month":
+        month = df["month"].fillna(1).astype(int).astype(str)
+        df["time_index"] = pd.to_datetime(year + "-" + month + "-01")
+    else:
+        raise ValueError("resolution must be 'year' or 'month'")
+
+    df = df.sort_values("time_index")
+    bounds = lambda a: (
+        (np.nan, np.nan) if not len(a[~np.isnan(a)])
+        else (np.percentile(a[~np.isnan(a)], (1 - ci) / 2 * 100),
+              np.percentile(a[~np.isnan(a)], (1 + ci) / 2 * 100)))
+
+    rows = []
+    for t in df["time_index"].dropna().unique():
+        window = df[(df["time_index"] > t - pd.DateOffset(years=window_size))
+                    & (df["time_index"] <= t)]
+        if window.empty:
+            continue
+        events = window[event_col].unique()
+        grouped = {e: g for e, g in window.groupby(event_col, observed=True)}
+
+        prec, rec, f1 = [], [], []
+        for _ in range(n_boot):
+            sample = pd.concat(
+                [grouped[e] for e in rng.choice(events, size=len(events), replace=True)],
+                ignore_index=True)
+            if sample["reported_bin"].sum() == 0:
+                prec.append(np.nan)
+            else:
+                prec.append(precision_score(sample["reported_bin"],
+                                            sample["pred_bin"], zero_division=0))
+            rec.append(recall_score(sample["reported_bin"], sample["pred_bin"],
+                                    zero_division=0))
+            f1.append(f1_score(sample["reported_bin"], sample["pred_bin"],
+                               zero_division=0))
+
+        entry = {"time_index": t, "n_events_in_window": len(events)}
+        for name, vals in (("precision", prec), ("recall", rec), ("f1", f1)):
+            arr = np.asarray(vals, dtype=float)
+            lo, hi = bounds(arr)
+            entry[f"{name}_mean"] = np.nanmean(arr)
+            entry[f"{name}_lower"] = lo
+            entry[f"{name}_upper"] = hi
+        rows.append(entry)
+
+    return pd.DataFrame(rows)
+
+
+def plot_rolling_comparison(walk, loocv, from_date="2005-01-01", savefig=None):
+    """Precision and recall over time, walk-forward against leave-one-out.
+
+    `walk` and `loocv` are {threshold: rolling-metrics frame}. Two thresholds
+    across the columns, precision above recall down the rows.
+    """
+    import matplotlib.dates as mdates
+    import matplotlib.pyplot as plt
+
+    thresholds = sorted(walk)
+    fig, ax = plt.subplots(2, 2, figsize=(10, 6), sharex=True, sharey=False)
+
+    for col, t in enumerate(thresholds):
+        for row, metric in enumerate(("precision", "recall")):
+            a = ax[row, col]
+            for frame, colour, label, width in (
+                    (walk[t], COLOR_WALK_FORWARD, "Walk-Forward", 3),
+                    (loocv[t], COLOR_LOOCV, "LOOCV", 2)):
+                d = frame[frame["time_index"] >= from_date]
+                a.plot(d["time_index"], d[f"{metric}_mean"], color=colour,
+                       linewidth=width, alpha=0.7,
+                       label=label if (row == 0 and col == 0) else None)
+                a.fill_between(d["time_index"], d[f"{metric}_lower"],
+                               d[f"{metric}_upper"], color=colour, alpha=0.2)
+            a.set_ylim([0, 1])
+            a.grid(True, linestyle="--", alpha=0.6)
+            a.tick_params(labelsize=12)
+            if row == 0:
+                a.set_title(f"Threshold = {t}%", fontsize=15)
+            if col == 0:
+                a.set_ylabel(metric.capitalize(), fontsize=15)
+            else:
+                a.tick_params(left=False, labelleft=False)
+    ax[0, 0].legend(loc="lower center", ncol=2, fontsize=13, frameon=True)
+
+    fig.text(0.5, 0.04, "Time", ha="center", fontsize=15)
+    for a in ax[1, :]:
+        a.xaxis.set_major_locator(mdates.YearLocator(2))
+        a.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+    fig.autofmt_xdate()
+    plt.tight_layout(rect=[0, 0.05, 1, 0.96])
+    if savefig:
+        plt.savefig(savefig, dpi=300, bbox_inches="tight", pad_inches=0.2)
+    return fig
+
+
+def plot_cumulative_events(df, from_year=2012, savefig=None):
+    """Cyclones available to train on, accumulating over the record."""
+    import matplotlib.pyplot as plt
+
+    per_year = df.groupby("year")["DisNo."].nunique()
+    cumulative = per_year.cumsum()
+    cumulative = cumulative[cumulative.index >= from_year]
+
+    fig, ax = plt.subplots(figsize=(10, 3))
+    ax.plot(cumulative.index, cumulative.values, marker="o", linestyle="-",
+            color="#C5C4C3", linewidth=2, label="Training Data")
+    ax.set_ylabel("TCs", fontsize=15)
+    ax.set_xlabel("Year", fontsize=15)
+    ax.tick_params(axis="x", labelsize=12)
+    ax.tick_params(axis="y", labelsize=12)
+    ax.grid(True, linestyle="--", alpha=0.6)
+    ax.legend(loc="upper left", fontsize=15, frameon=True)
+    plt.tight_layout()
+    if savefig:
+        plt.savefig(savefig, dpi=300, bbox_inches="tight", pad_inches=0.2)
+    return fig, cumulative
