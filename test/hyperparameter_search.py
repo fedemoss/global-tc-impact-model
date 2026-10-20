@@ -121,9 +121,12 @@ PARAM_SPACE = {
     # recall against precision directly, and interacts with clf_threshold.
     # u = 1 is a fully balanced training set; larger keeps the data closer to
     # its natural imbalance.
-    "u1": [1, 2, 3, 5, 8, 10],   # stage 1, affected vs not affected
-    "u2": [1, 2, 3, 5, 8, 10],   # stage 2, high impact vs low impact
-    "clf_threshold": [0.30, 0.40, 0.50, 0.60, 0.70],
+    # The last search selected u2 = 10 and clf_threshold = 0.70 -- both at the
+    # edge of the previous grid. A boundary optimum may be censored, so the
+    # grids extend past them; if the selection moves interior, it was.
+    "u1": [1, 2, 3, 5, 8, 10, 15, 20],   # stage 1, affected vs not affected
+    "u2": [1, 2, 3, 5, 8, 10, 15, 20],   # stage 2, high impact vs low impact
+    "clf_threshold": [0.30, 0.40, 0.50, 0.60, 0.70, 0.75, 0.80],
 }
 
 # A deliberately small space for --search grid, which is exhaustive and so can
@@ -139,9 +142,9 @@ PARAM_GRID_SMALL = {
     "clf_max_depth": [3, 5],
     "reg_learning_rate": [0.01, 0.05],
     "reg_max_depth": [3, 5],
-    "u1": [1, 2, 3, 5, 8, 10],
-    "u2": [1, 2, 3, 5, 8, 10],
-    "clf_threshold": [0.4, 0.5, 0.6],
+    "u1": [1, 2, 3, 5, 8, 10, 15, 20],
+    "u2": [1, 2, 3, 5, 8, 10, 15, 20],
+    "clf_threshold": [0.4, 0.5, 0.6, 0.7, 0.8],
 }
 # Held fixed across the grid, at the production defaults, so the exhaustive
 # sweep stays tractable. The random search varies all of these.

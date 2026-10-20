@@ -20,7 +20,7 @@ def _save_final_model(model, out_dir):
 
 
 def run_loocv_pipeline(df, events, model, strategy="global", output_folder="loocv_results",
-                       event_col="DisNo.", recompute=False):
+                       event_col="sid", recompute=False):
     """
     Executes LOOCV strategies based exactly on the original paper parameters.
 
