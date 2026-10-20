@@ -112,7 +112,15 @@ CLF_THRESHOLDS = (0.40, 0.50, 0.60, 0.70, 0.80, 0.90)
 # runs past them: dense below 10, where one step changes the training set
 # substantially, and wider above. Each result records whether the ratio
 # saturated, since beyond that point a larger ratio is the same training set.
-U_VALUES = (1, 2, 5, 8, 10, 12, 15, 17, 20, 22, 25)
+# The two stages rebalance different populations, so they saturate at
+# different points: stage 1 holds ~14 unaffected cells per affected one and
+# runs out of majority rows to drop at 15, while stage 2 holds ~27 low-impact
+# cells per high-impact one and still has rows to drop at 25. Past saturation
+# a larger ratio is the same training set, so each ladder stops where its
+# stage does, with the saturating value kept as the "keep everything" end.
+U1_VALUES = (1, 2, 5, 8, 10, 12, 15)
+U2_VALUES = (1, 2, 5, 8, 10, 12, 15, 17, 20, 22, 25, 28)
+U_VALUES = U1_VALUES  # the random phase samples one ladder for both ratios
 
 PARAM_SPACE = {
     "clf_learning_rate": [0.01, 0.03, 0.05, 0.1],
@@ -129,8 +137,8 @@ PARAM_SPACE = {
     "reg_subsample": [0.6, 0.8, 1.0],
     "reg_colsample_bytree": [0.6, 0.8, 1.0],
     "reg_n_estimators": [100, 200, 400],
-    "u1": list(U_VALUES),
-    "u2": list(U_VALUES),
+    "u1": list(U1_VALUES),
+    "u2": list(U2_VALUES),
 }
 
 
@@ -390,7 +398,7 @@ def score_candidate(cand, df_search, folds, features, select_on, nthread=1):
 # every (u1, u2) combination is assembled from stored predictions.
 # --------------------------------------------------------------------------
 def ratios_grid(df_search, folds, features, clf_params, reg_params, select_on,
-                u_values=U_VALUES, n_jobs=1, nthread=1):
+                u1_values=U1_VALUES, u2_values=U2_VALUES, n_jobs=1, nthread=1):
     clf_params = {**clf_params, "nthread": nthread}
     reg_params = {**reg_params, "nthread": nthread}
 
@@ -406,16 +414,19 @@ def ratios_grid(df_search, folds, features, clf_params, reg_params, select_on,
             pred = model.predict(df_test[features])
         return (fold_idx, stage, u), (pred, saturated)
 
-    jobs = [(i, stage, u) for i in range(len(folds)) for stage in ("clf", "reg") for u in u_values]
-    logging.info(f"ratios grid: {len(jobs)} stage fits "
-                 f"({len(folds)} folds x 2 stages x {len(u_values)} ratios) cover "
-                 f"{len(u_values) ** 2} (u1, u2) combinations x {len(CLF_THRESHOLDS)} thresholds")
+    jobs = ([(i, "clf", u) for i in range(len(folds)) for u in u1_values]
+            + [(i, "reg", u) for i in range(len(folds)) for u in u2_values])
+    logging.info(
+        f"ratios grid: {len(jobs)} stage fits "
+        f"({len(folds)} folds x ({len(u1_values)} u1 + {len(u2_values)} u2)) cover "
+        f"{len(u1_values) * len(u2_values)} (u1, u2) combinations x "
+        f"{len(CLF_THRESHOLDS)} thresholds")
     fitted = dict(Parallel(n_jobs=n_jobs)(delayed(one_fit)(*job) for job in jobs))
 
     test_frames = [df_search[df_search["sid"].isin(folds[i][1])] for i in range(len(folds))]
     results, curves = [], {}
-    for u1 in u_values:
-        for u2 in u_values:
+    for u1 in u1_values:
+        for u2 in u2_values:
             cells = pd.concat([
                 oof_frame(test_frames[i],
                           fitted[(i, "clf", u1)][0], fitted[(i, "reg", u2)][0])
