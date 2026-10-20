@@ -24,6 +24,15 @@ CATEGORY_LABELS = ["no impact", f"0-{IMPACT_THRESHOLD_HIGH}%",
                    f">{IMPACT_THRESHOLD_HIGH}%"]
 STRATEGIES = ["global", "walk_forward", "geo_constrained"]
 
+#: Variants of the model itself, as opposed to the cross-validation strategy.
+#: Each is a folder suffix under model_output, and each is a different model
+#: of the same administrative units.
+MODEL_VARIANTS = {
+    "grid-fitted": "2-stage-XGBoost_global_adm1",
+    "ADM1-fitted": "2-stage-XGBoost_global_adm1_trained",
+    "no prev. events": "2-stage-XGBoost_global_grid_no_N_events_5_years",
+}
+
 
 def output_folder(model_name, strategy="global", level="adm1"):
     return OUTPUT_DIR / f"model_output/{model_name}_{strategy}_{level}"
@@ -278,3 +287,38 @@ def plot_models_violin(ax, dfs, model_names, colors=None, show_legend=True,
         ax.set_xticklabels([f"{c}\n({p})" for c, p in zip(category_order, info)],
                            fontsize=11)
     return ax
+
+
+def load_variant(folder_name, level="adm1"):
+    """One model variant's predictions, by output folder name.
+
+    A variant fitted at grid level is read from its ADM1 aggregation, so every
+    variant is compared on the administrative units impact is reported at.
+    """
+    from src.config import OUTPUT_DIR
+
+    base = OUTPUT_DIR / "model_output"
+    # a grid-fitted variant is aggregated into a sibling folder
+    if folder_name.endswith("_grid") or "_grid_" in folder_name:
+        aggregated = base / folder_name.replace("_grid", "_adm1", 1)
+        if aggregated.exists() or aggregated.with_suffix(".parquet").exists():
+            folder_name = aggregated.name
+
+    folder = base / folder_name
+    bundle = folder.with_suffix(".parquet")
+    if bundle.exists():
+        return pd.read_parquet(bundle)
+    files = sorted(folder.glob("predictions_event_*.csv"))
+    if not files:
+        return None
+    return pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+
+
+def load_variants(variants=None, level="adm1"):
+    """{label: frame} for whichever model variants have been scored."""
+    out = {}
+    for label, folder in (variants or MODEL_VARIANTS).items():
+        df = load_variant(folder, level=level)
+        if df is not None:
+            out[label] = df
+    return out
