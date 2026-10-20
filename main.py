@@ -106,6 +106,17 @@ def main():
                              "only on cyclones preceding the test one, and "
                              "'geo_constrained' only on cyclones in the same basin. "
                              "Each writes to its own output folder")
+    parser.add_argument("--predict-unit", choices=["DisNo.", "sid"], default="DisNo.",
+                        help="Unit predicted per cross-validation fold: the "
+                             "country-event record impact is reported at "
+                             "(default), or the physical cyclone")
+    parser.add_argument("--withhold-unit", choices=["DisNo.", "sid"], default="sid",
+                        help="Unit withheld from each fold's training set. The "
+                             "default withholds the whole cyclone, so the other "
+                             "countries it struck cannot train the fold "
+                             "predicting this one. Set it equal to "
+                             "--predict-unit to withhold only the record under "
+                             "test. Non-default pairs write to their own folder")
     parser.add_argument("--recompute", action="store_true",
                         help="Overwrite existing per-event predictions instead of "
                              "reusing them. Required after changing the model or its "
@@ -187,6 +198,8 @@ def main():
                          f"fitted at {args.train_at})...")
             execute_training_run("2-stage-XGBoost", strategy=strategy,
                                  aggregate_to_adm1=(args.train_at == "adm1"),
+                                 event_col=args.predict_unit,
+                                 exclude_col=args.withhold_unit,
                                  recompute=args.recompute,
                                  features=features, run_name=run_name)
 
