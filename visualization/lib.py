@@ -5,6 +5,8 @@ one definition of what a model output is and how a prediction is categorised,
 and so that the plotting, which is the bulk of the code, does not crowd out
 the analysis.
 """
+import os
+
 import numpy as np
 import pandas as pd
 
@@ -34,8 +36,17 @@ MODEL_VARIANTS = {
 }
 
 
+#: Appended to the model's output folders, so that a re-run kept under its own
+#: name can be read with these notebooks while the folders an earlier run wrote
+#: stay where they are. Empty reads the original run.
+RUN_SUFFIX = os.environ.get("TC_RUN_SUFFIX", "")
+
+
 def output_folder(model_name, strategy="global", level="adm1"):
-    return OUTPUT_DIR / f"model_output/{model_name}_{strategy}_{level}"
+    # The rule baselines have no fitted parameters and are not re-run with the
+    # model, so they keep their single set of folders.
+    suffix = RUN_SUFFIX if model_name == "2-stage-XGBoost" else ""
+    return OUTPUT_DIR / f"model_output/{model_name}_{strategy}_{level}{suffix}"
 
 
 def load_model(model_name, strategy="global", level="adm1"):
@@ -298,6 +309,8 @@ def load_variant(folder_name, level="adm1"):
     from src.config import OUTPUT_DIR
 
     base = OUTPUT_DIR / "model_output"
+    # Every variant is a fitting of the model itself, so each follows the run.
+    folder_name = f"{folder_name}{RUN_SUFFIX}"
     # A grid-fitted variant is compared through its ADM1 aggregation, which
     # the training run writes once it has finished. Falling back to the grid
     # output would put cells and administrative units in the same comparison.
