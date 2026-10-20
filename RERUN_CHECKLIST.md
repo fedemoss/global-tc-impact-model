@@ -48,7 +48,7 @@ grids (u1/u2 up to 20, threshold up to 0.80).
       evaluation share the sid unit):
 
       ```bash
-      python test/hyperparameter_search.py --n-iter 80 --n-events 200
+      python src/models/hyperparameter_search.py --n-iter 80 --n-events 200
       ```
 
 - [ ] If the selection moves interior, the old values were censored; if it

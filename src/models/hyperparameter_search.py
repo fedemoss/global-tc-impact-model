@@ -55,9 +55,9 @@ written out so a winner inside the noise band is visible as such.
 
 Usage
 -----
-    python test/hyperparameter_search.py --n-iter 80 --n-events 200
-    python test/hyperparameter_search.py --search ratios
-    python test/hyperparameter_search.py --dry-run     # tiny, for a smoke test
+    python src/models/hyperparameter_search.py --n-iter 80 --n-events 200
+    python src/models/hyperparameter_search.py --search ratios
+    python src/models/hyperparameter_search.py --dry-run   # tiny, for a smoke test
 
 Nothing is written until the search completes; pass `--output` to write
 somewhere other than the configured path.
@@ -82,7 +82,7 @@ except ImportError:  # scikit-learn < 0.24
     from sklearn.model_selection import GroupKFold
     HAS_STRATIFIED_GROUP_KFOLD = False
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.config import FEATURES, HYPERPARAMETERS_PATH, INPUT_DIR
 from src.models.two_stage_xgb import TwoStageXGBoost

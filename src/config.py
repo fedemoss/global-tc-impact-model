@@ -80,7 +80,7 @@ RASTER_WORKERS = int(os.getenv("TC_IMPACT_RASTER_WORKERS", "8"))
 RASTER_CHUNK_SIZE = int(os.getenv("TC_IMPACT_RASTER_CHUNK", "10000"))
 
 # Tuned hyperparameters for the two-stage model, written by
-# test/hyperparameter_search.py and picked up automatically by
+# src/models/hyperparameter_search.py and picked up automatically by
 # models/two_stage_xgb.py. If the file is absent the model falls back to the
 # defaults hardcoded in that class, so a fresh clone still runs.
 HYPERPARAMETERS_PATH = Path(
