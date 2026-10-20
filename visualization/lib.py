@@ -298,11 +298,14 @@ def load_variant(folder_name, level="adm1"):
     from src.config import OUTPUT_DIR
 
     base = OUTPUT_DIR / "model_output"
-    # a grid-fitted variant is aggregated into a sibling folder
+    # A grid-fitted variant is compared through its ADM1 aggregation, which
+    # the training run writes once it has finished. Falling back to the grid
+    # output would put cells and administrative units in the same comparison.
     if folder_name.endswith("_grid") or "_grid_" in folder_name:
         aggregated = base / folder_name.replace("_grid", "_adm1", 1)
-        if aggregated.exists() or aggregated.with_suffix(".parquet").exists():
-            folder_name = aggregated.name
+        if not (aggregated.exists() or aggregated.with_suffix(".parquet").exists()):
+            return None
+        folder_name = aggregated.name
 
     folder = base / folder_name
     bundle = folder.with_suffix(".parquet")
