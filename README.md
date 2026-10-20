@@ -23,13 +23,12 @@ If you use this repository or the generated dataset in your research, please cit
 │   ├── collectors/           # Data acquisition (general_collector.py, pps_collector.py)
 │   ├── static_features/      # Spatial Processing (grid_cells.py, process_gadm.py, etc.)
 │   ├── dynamic_features/     # Event-Based Processing (process_emdat.py, process_wind.py, etc.)
-│   ├── models/               # Two-Stage XGBoost & Baselines (train.py)
+│   ├── models/               # Two-Stage XGBoost & Baselines (train.py), tuning (hyperparameter_search.py)
 │   ├── evaluation/           # LOOCV (cv_strategies.py), metrics & bootstrap CIs (bootstrap.py)
 │   ├── interpretability/     # SHAP Analysis & Visualization
 │   ├── utils/                # Shared helpers (geo_utils, logging_setup, time interpolation)
 │   ├── config.py             # Global constants, URLs, and ISO3 List
 │   └── dataset_builder.py    # Master script to compile the final Parquet
-├── test/                     # Hyperparameter search (hyperparameter_search.py)
 ├── main.py                   # Unified CLI Entry Point
 ├── requirements.txt          # Python dependencies
 └── README.md
@@ -164,17 +163,22 @@ python main.py --stage build
 
 ### 3. Hyperparameter Search (optional, but do it before reporting results)
 ```bash
-# Joint random search over both stages; writes data/model_hyperparameters.json
-python test/hyperparameter_search.py --n-iter 80 --n-events 200
+# Stage 1 -- random search over the tree parameters and the ratios;
+# writes data/model_hyperparameters.json
+python src/models/hyperparameter_search.py --n-iter 80 --n-events 200
 
-# Exhaustive search over a deliberately small grid instead
-python test/hyperparameter_search.py --search grid
+# Stage 2 -- trees frozen at stage 1's winner, every (u1, u2) scored
+# exhaustively and the threshold swept for free
+python src/models/hyperparameter_search.py --search ratios \
+    --from-json data/model_hyperparameters_stage1.json --select-on f1_high
 
 # Tiny budget, just to check the plumbing runs
-python test/hyperparameter_search.py --dry-run
+python src/models/hyperparameter_search.py --dry-run
 ```
 
-`test/hyperparameter_search.py` tunes **both stages at once** — the stage-1 classifier, the stage-2 regressor, the two class-balancing ratios (`u1`, `u2`) and the stage-1 decision threshold (`clf_threshold`). Tuning the stages separately would miss their interaction: how aggressively stage 1 flags cells decides which rows stage 2 ever sees.
+`src/models/hyperparameter_search.py` tunes **both stages together** — the stage-1 classifier, the stage-2 regressor, the two class-balancing ratios (`u1`, `u2`) and the stage-1 decision threshold (`clf_threshold`). Tuning the stages separately would miss their interaction: how aggressively stage 1 flags cells decides which rows stage 2 ever sees.
+
+The two passes split that search rather than separating the stages. The random pass covers the tree parameters, which are many and whose surface is flat, by sampling. The ratios pass then grids `u1 × u2` exhaustively, since those two and the threshold set the precision/recall operating point the high-impact class depends on, and a sampled grid leaves that under-explored. The second pass is cheap because the search factorizes: `u1` enters only stage 1 and `u2` only stage 2, so each fold needs `|u1| + |u2|` fits rather than `|u1| × |u2|`, and every pair is assembled from the stored predictions. The threshold is applied to those same predictions, so sweeping it costs nothing and the whole curve is reported.
 
 Three properties are worth knowing, because they decide whether the reported numbers mean anything:
 

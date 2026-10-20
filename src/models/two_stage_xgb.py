@@ -3,7 +3,7 @@
 Stage 1 is a binary classifier ("is this grid cell affected at all?"), stage 2 a
 regressor for the affected percentage, fitted only on cells stage 1 flags as
 positive. Both stages, the two class-balancing ratios (`u1`, `u2`) and the
-stage-1 decision threshold are tuned jointly by `test/hyperparameter_search.py`
+stage-1 decision threshold are tuned jointly by `src/models/hyperparameter_search.py`
 and read back here from `HYPERPARAMETERS_PATH`.
 """
 import json
