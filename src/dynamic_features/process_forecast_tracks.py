@@ -283,3 +283,170 @@ def lead_times(cycles, landfall):
     """
     cycle = pd.to_datetime(pd.Series(cycles), utc=True)
     return (pd.Timestamp(landfall) - cycle).dt.total_seconds() / 3600.0
+
+
+# --------------------------------------------------------------------------
+# Wind fields, one per ensemble member
+# --------------------------------------------------------------------------
+#: Separates the parts of a member's identifier, which has to survive a round
+#: trip through CLIMADA as a single string.
+_ID_SEP = "|"
+
+
+def _member_id(cycle, member):
+    return f"{pd.Timestamp(cycle):%Y%m%d%H}{_ID_SEP}{member}"
+
+
+def _split_member_id(identifier):
+    cycle, _, member = identifier.partition(_ID_SEP)
+    return pd.to_datetime(cycle, format="%Y%m%d%H", utc=True), member
+
+
+def _as_climada_track(rows, name, identifier):
+    """One member's forecast as the track structure the wind model takes.
+
+    The forecast gives position, central pressure and maximum wind; the radii
+    the model would otherwise use are left absent so that it falls back to its
+    own parametrisation, and the environmental pressure takes its standard
+    value, neither being reported in this product.
+    """
+    import xarray as xr
+
+    rows = rows.sort_values("valid_time")
+    time_step = (rows["valid_time"].diff().dt.total_seconds() / 3600).fillna(0)
+    # The wind model reads the time coordinate through pandas' datetime
+    # accessor, which a zone-aware column does not offer: it would arrive as
+    # an array of objects. The times are UTC throughout, so the zone is
+    # dropped rather than converted.
+    times = rows["valid_time"].dt.tz_localize(None).to_numpy("datetime64[ns]")
+    nan = np.full(len(rows), np.nan)
+    track = xr.Dataset(
+        data_vars={
+            "max_sustained_wind": ("time", rows["wind_speed_ms"].to_numpy("float32")),
+            "central_pressure": ("time", rows["pressure_hpa"].to_numpy("float32")),
+            "environmental_pressure": ("time", np.full(len(rows), 1013.25, "float32")),
+            "lat": ("time", rows["latitude"].to_numpy("float32")),
+            "lon": ("time", rows["longitude"].to_numpy("float32")),
+            "radius_max_wind": ("time", nan),
+            "radius_oci": ("time", nan),
+            "time_step": ("time", time_step.to_numpy("float32")),
+            "basin": ("time", np.full(len(rows), "WP", "<U2")),
+        },
+        coords={"time": times},
+        attrs={
+            "max_sustained_wind_unit": "m/s",
+            "central_pressure_unit": "mb",
+            "name": name,
+            "sid": identifier,
+            "orig_event_flag": True,
+            "data_provider": "TIGGE",
+            "id_no": identifier,
+            "category": 0,
+        },
+    )
+    return track.set_coords(["lat", "lon"])
+
+
+def member_windfields(member_rows, iso3, grid=None, min_fixes=3):
+    """The wind field each ensemble member implies, over a country's cells.
+
+    Every member of every cycle is run through the same wind model the
+    historical features use, so a forecast wind and an observed wind reaching
+    the model mean the same thing.
+    """
+    import geopandas as gpd
+    from climada.hazard import Centroids, TCTracks, TropCyclone
+
+    from src.config import INPUT_DIR
+
+    if grid is None:
+        # The wind model takes centroids, so the grid is read as the points
+        # the cells are represented by, as the historical features read it.
+        cells = pd.read_csv(INPUT_DIR / "GRID" / "merged" /
+                            "global_grid_centroids.csv")
+        cells = cells[cells["iso3"] == iso3]
+        grid = gpd.GeoDataFrame(
+            cells, geometry=gpd.points_from_xy(cells.Longitude, cells.Latitude),
+            crs="EPSG:4326")
+    grid = grid.reset_index(drop=True)
+    if grid.empty:
+        raise ValueError(f"no grid cells for {iso3}")
+
+    usable = [rows for rows in member_rows
+              if len(rows.dropna(subset=["wind_speed_ms"])) >= min_fixes]
+    if not usable:
+        return pd.DataFrame()
+
+    tracks = TCTracks()
+    tracks.data = [
+        _as_climada_track(
+            rows, name=str(rows["cyclone_name"].iloc[0]),
+            identifier=_member_id(rows["cycle"].iloc[0],
+                                  rows["ensemble_member"].iloc[0]))
+        for rows in usable
+    ]
+
+    centroids = Centroids.from_geodataframe(grid)
+    # store_windfields segfaults on small centroid sets and the intensity is
+    # kept regardless; the inland cull is a speed optimisation that needs a
+    # raster whose published location no longer serves it.
+    tc = TropCyclone.from_tracks(tracks, centroids=centroids,
+                                 intensity_thres=0,
+                                 ignore_distance_to_coast=True)
+
+    # CLIMADA collapses duplicate coordinates, so each cell is mapped back to
+    # the centroid that carries its value.
+    lookup = {(round(lat, 6), round(lon, 6)): i
+              for i, (lat, lon) in enumerate(zip(tc.centroids.lat,
+                                                 tc.centroids.lon))}
+    index = np.array([lookup.get((round(lat, 6), round(lon, 6)), 0)
+                      for lat, lon in zip(grid.Latitude.values,
+                                          grid.Longitude.values)])
+
+    frames = []
+    for intensity, identifier in zip(tc.intensity, tc.event_name):
+        cycle, member = _split_member_id(identifier)
+        frames.append(pd.DataFrame({
+            "id": grid["id"].values,
+            "iso3": iso3,
+            "cycle": cycle,
+            "ensemble_member": member,
+            "wind_speed": intensity.toarray().flatten()[index],
+        }))
+    return pd.concat(frames, ignore_index=True)
+
+
+def forecast_windfields(disno, sid, iso3, event_name, provider=DEFAULT_PROVIDER,
+                        lead_hours=None, grid=None):
+    """Every ensemble member's wind field for one event, with its lead time.
+
+    Returns one row per (cycle, member, grid cell), carrying the hours between
+    the cycle and the storm's arrival so that skill can be read against how
+    much warning the forecast gave.
+    """
+    cycles = read_event(disno, provider)
+    if cycles.empty:
+        logger.info(f"{disno}: no forecasts collected")
+        return pd.DataFrame()
+
+    storm = select_storm(cycles, event_name)
+    if storm.empty:
+        return pd.DataFrame()
+
+    rows = member_tracks(storm, lead_hours=lead_hours)
+    fields = member_windfields(rows, iso3, grid=grid)
+    if fields.empty:
+        return fields
+
+    landfall, how = landfall_time(sid, iso3)
+    fields["DisNo."] = disno
+    fields["sid"] = sid
+    fields["landfall"] = landfall
+    fields["landfall_from"] = how
+    fields["lead_hours"] = lead_times(fields["cycle"], landfall)
+    logger.info(f"{disno}: {fields['cycle'].nunique()} cycles x "
+                f"{fields['ensemble_member'].nunique()} members over "
+                f"{fields['id'].nunique():,} cells; lead "
+                f"{fields['lead_hours'].min():.0f} to "
+                f"{fields['lead_hours'].max():.0f} h")
+    return fields
