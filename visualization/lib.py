@@ -12,7 +12,7 @@ import pandas as pd
 
 from src.config import OUTPUT_DIR
 from src.evaluation.aggregation import (IMPACT_THRESHOLD_HIGH,
-                                        IMPACT_THRESHOLD_LOW)
+                                        IMPACT_THRESHOLD_LOW, exceeds)
 
 MODEL_ORDER = ["historical", "windspeed-exposed", "windspeed-historical",
                "2-stage-XGBoost"]
@@ -23,7 +23,7 @@ MODEL_LABELS = {
     "2-stage-XGBoost": "2-stage XGBoost",
 }
 CATEGORY_LABELS = ["no impact", f"0-{IMPACT_THRESHOLD_HIGH}%",
-                   f">{IMPACT_THRESHOLD_HIGH}%"]
+                   f"≥{IMPACT_THRESHOLD_HIGH}%"]
 STRATEGIES = ["global", "walk_forward", "geo_constrained"]
 
 #: Variants of the model itself, as opposed to the cross-validation strategy.
@@ -144,7 +144,7 @@ def absolute_errors(df, target_col="reported", pred_col="predicted"):
 # The categorical axis labels and the figure styling follow the paper, so a
 # figure built here is the same one the paper carries.
 CATEGORY_ORDER = [r"$\it{no-imp.}$", r"$\it{low}$", r"$\it{high}$"]
-REPORTED_BANDS = ["0.0 %", "0.0-15.0%", ">15.0 %"]
+REPORTED_BANDS = ["0.0 %", "0.0-15.0%", "≥15.0 %"]
 MODEL_COLORS = ["#A0B0F3", "#AEC6CF", "#E6E6FA", "#E24916"]
 PAPER_MODEL_NAMES = ["historical", "windspeed-exposed", "windspeed-historical",
                      r"$\bf{2\text{-}stage\text{-}XGBoost}$"]
@@ -401,8 +401,8 @@ def rolling_metrics_with_bootstrap(df, event_col="sid", threshold=0,
 
     rng = np.random.default_rng(seed)
     df = df[df["year"] >= from_year].copy()
-    df["reported_bin"] = (df["reported"] > threshold).astype(int)
-    df["pred_bin"] = (df["predicted"] > threshold).astype(int)
+    df["reported_bin"] = exceeds(df["reported"], threshold).astype(int)
+    df["pred_bin"] = exceeds(df["predicted"], threshold).astype(int)
 
     year = df["year"].astype(int).astype(str)
     if resolution == "year":

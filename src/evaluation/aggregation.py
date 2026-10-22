@@ -62,11 +62,25 @@ def aggregate_predictions_to_adm1(df_pred, target_name=TARGET_NAME,
     return grouped.dropna(subset=["reported", "predicted"])
 
 
+def exceeds(values, threshold, low=IMPACT_THRESHOLD_LOW):
+    """The positive class of a threshold.
+
+    The zero cut separates "affected at all" from "not affected", so it is
+    strict: a unit reported at zero is not affected. Every other cut is the
+    boundary of a magnitude band, and the boundary belongs to the band above
+    it, so the high-impact class is `high`% or more.
+    """
+    return values > threshold if threshold == low else values >= threshold
+
+
 def categorise(series, low=IMPACT_THRESHOLD_LOW, high=IMPACT_THRESHOLD_HIGH):
-    """0 = no impact, 1 = up to `high`%, 2 = above `high`%."""
+    """0 = no impact, 1 = below `high`%, 2 = `high`% or above."""
     import numpy as np
-    bins = [-np.inf, low, high, np.inf]
-    return pd.cut(series, bins=bins, labels=[0, 1, 2]).astype(int)
+    out = np.where(exceeds(series, high, low), 2,
+                   np.where(exceeds(series, low, low), 1, 0))
+    if isinstance(series, pd.Series):
+        return pd.Series(out, index=series.index, dtype=int)
+    return out.astype(int)
 
 
 def aggregate_output_folder(grid_folder, adm1_folder, target_name=TARGET_NAME,
