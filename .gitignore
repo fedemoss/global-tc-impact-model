@@ -175,3 +175,6 @@ download_srtm_tiles_old.py
 
 # Local test suite for the pipeline internals -- kept on disk, not part of the release
 /tests/
+
+# Internal working notes, kept locally.
+/RERUN_CHECKLIST.md
