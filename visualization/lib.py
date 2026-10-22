@@ -661,7 +661,10 @@ def plot_case_studies(cases, suffix="", extents=None, pad=1.5, savefig=None,
 
         for col, column in enumerate(("band_reported", "band_wind", "band_xgb")):
             ax = axes[row][col]
-            context.plot(ax=ax, color="lightgray", edgecolor="black", linewidth=0.25)
+            # A frame closed in on one country may hold no neighbour to draw.
+            if not context.empty:
+                context.plot(ax=ax, color="lightgray", edgecolor="black",
+                             linewidth=0.25)
             g.plot(ax=ax, color=band_colors(g[column]), edgecolor="black",
                    linewidth=0.4)
             if track is not None:
@@ -805,3 +808,75 @@ def bootstrap_over_events(df, metric_fn, event_col="sid", n_boot=1000, ci=95,
                   float(np.percentile(drawn, low)) if drawn.size else np.nan,
                   float(np.percentile(drawn, high)) if drawn.size else np.nan)
     return out
+
+
+# --------------------------------------------------------------------------
+# Where to put the high-impact boundary
+#
+# The 15% cut is a choice, and the two things that follow from it pull in
+# opposite directions: a higher cut isolates the events worth acting on, and
+# leaves fewer of them to learn from. Sweeping it shows both at once.
+# --------------------------------------------------------------------------
+HIGH_IMPACT_SWEEP = list(range(1, 32, 2))
+
+
+def threshold_sweep(df, thresholds=None, target_col="reported",
+                    pred_col="predicted"):
+    """Precision, recall and F1 for the high-impact class at each threshold."""
+    from sklearn.metrics import f1_score, precision_score, recall_score
+
+    thresholds = thresholds or HIGH_IMPACT_SWEEP
+    rows = []
+    for t in thresholds:
+        reported = exceeds(df[target_col], t).astype(int)
+        predicted = exceeds(df[pred_col], t).astype(int)
+        rows.append({
+            "threshold": t,
+            "precision": precision_score(reported, predicted, zero_division=0),
+            "recall": recall_score(reported, predicted, zero_division=0),
+            "f1": f1_score(reported, predicted, zero_division=0),
+            "n_above": int(reported.sum()),
+            "share_above": 100 * float(reported.mean()),
+        })
+    return pd.DataFrame(rows)
+
+
+def plot_threshold_sweep(sweep, savefig=None, share_col="share_above"):
+    """The sweep, over the share of units the threshold leaves above it.
+
+    The lower panel is what the upper one is paid for: as the cut rises the
+    positive class thins, and a score computed on fewer and fewer units says
+    less and less.
+    """
+    import matplotlib.pyplot as plt
+
+    fig, (ax, ax2) = plt.subplots(2, 1, figsize=(6, 7), sharex=True)
+
+    for metric, color, label in (("precision", "#882572", "Precision"),
+                                 ("recall", "#d62728", "Recall"),
+                                 ("f1", "#e08f3f", "F1")):
+        ax.plot(sweep["threshold"], sweep[metric], color=color, marker="o",
+                linewidth=1.2, markersize=5, label=label)
+    ax.set_ylabel("Score", fontsize=13)
+    ax.legend(fontsize=11, frameon=True)
+    ax.grid(True, alpha=0.2, linewidth=0.5)
+
+    above = sweep[share_col]
+    ax2.bar(sweep["threshold"], above, width=1.6, color="#d62728", alpha=0.85,
+            label="Above threshold")
+    ax2.bar(sweep["threshold"], 100 - above, bottom=above, width=1.6,
+            color="#f5c6c6", alpha=0.85, label="Below threshold")
+    ax2.set_xlabel("High-Impact Threshold", fontsize=13)
+    ax2.set_ylabel("% of ADM1 regions", fontsize=13)
+    ax2.set_ylim(0, 100)
+    ax2.legend(fontsize=11, frameon=True)
+    ax2.grid(True, alpha=0.2, linewidth=0.5, axis="y")
+
+    for axis in (ax, ax2):
+        axis.spines["top"].set_visible(False)
+        axis.spines["right"].set_visible(False)
+
+    plt.tight_layout()
+    if savefig:
+        fig.savefig(savefig, dpi=300, bbox_inches="tight", pad_inches=0.5)
+    return fig
