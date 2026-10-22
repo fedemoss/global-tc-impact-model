@@ -198,3 +198,88 @@ def member_tracks(storm_rows, lead_hours=None):
                 continue
         tracks.append(group.assign(cycle=cycle, ensemble_member=member))
     return tracks
+
+
+# --------------------------------------------------------------------------
+# Landfall, which is what lead time is measured from
+# --------------------------------------------------------------------------
+#: Interval the best track is resampled to before the crossing is located.
+#: IBTrACS reports three-hourly, which puts landfall within an hour and a half
+#: at best; the track between two reports is close enough to straight at this
+#: scale for linear interpolation to sharpen that.
+LANDFALL_STEP = "15min"
+
+
+def country_outline(iso3, path=None):
+    """One polygon for a country, read without loading the whole world."""
+    import geopandas as gpd
+
+    from src.config import INPUT_DIR
+
+    path = path or INPUT_DIR / "SHP" / "global_shapefile_GID_adm2.gpkg"
+    units = gpd.read_file(path, columns=["GID_0", "geometry"],
+                          where=f"GID_0 = '{iso3}'")
+    if units.empty:
+        raise ValueError(f"{iso3} is not in {Path(path).name}")
+    return units.union_all()
+
+
+def best_track_points(sid):
+    """The observed track of a storm, as time, longitude and latitude."""
+    from src.dynamic_features.process_wind_features import _fetch_track
+
+    tracks, reason = _fetch_track(sid)
+    if tracks is None:
+        raise ValueError(f"{sid}: {reason}")
+    track = tracks.get_track()
+    return pd.DataFrame({
+        "time": pd.to_datetime(track.time.values, utc=True),
+        "lon": np.asarray(track.lon.values, dtype=float),
+        "lat": np.asarray(track.lat.values, dtype=float),
+    })
+
+
+def landfall_time(sid, iso3, step=LANDFALL_STEP, points=None, outline=None):
+    """When the storm reached the country, from the observed track.
+
+    Lead time is how long before the storm arrived a forecast was issued, so
+    the arrival has to be one instant that every forecast of that storm is
+    measured against. Taking it from the observed track rather than from each
+    forecast keeps it that way: a member that carries the storm ashore late
+    would otherwise be credited with more lead time for the same cycle.
+
+    A storm that stays offshore still has an arrival -- its closest approach --
+    and is reported as such, since impact does not require a crossing.
+    """
+    from shapely.geometry import Point
+
+    points = best_track_points(sid) if points is None else points
+    outline = country_outline(iso3) if outline is None else outline
+    if len(points) < 2:
+        raise ValueError(f"{sid}: too few track points to locate a crossing")
+
+    # Resample the track so the crossing is not pinned to a reporting hour.
+    dense = (points.set_index("time").sort_index()
+             .resample(step).interpolate("linear").reset_index())
+    inside = dense.apply(
+        lambda r: outline.contains(Point(r["lon"], r["lat"])), axis=1)
+
+    if inside.any():
+        crossing = dense.loc[inside.idxmax()]
+        return crossing["time"], "crossing"
+
+    distance = dense.apply(
+        lambda r: outline.distance(Point(r["lon"], r["lat"])), axis=1)
+    closest = dense.loc[distance.idxmin()]
+    logger.info(f"{sid} does not cross {iso3}; using closest approach "
+                f"({distance.min():.2f} deg)")
+    return closest["time"], "closest approach"
+
+
+def lead_times(cycles, landfall):
+    """Hours between each forecast cycle and the storm's arrival.
+
+    Positive before arrival, so a larger number is a longer warning.
+    """
+    cycle = pd.to_datetime(pd.Series(cycles), utc=True)
+    return (pd.Timestamp(landfall) - cycle).dt.total_seconds() / 3600.0
