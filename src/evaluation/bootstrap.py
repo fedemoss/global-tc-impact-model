@@ -31,6 +31,8 @@ Intervals are percentile-method, so they are neither bias- nor skew-corrected
 import numpy as np
 import pandas as pd
 
+from src.evaluation.aggregation import exceeds
+
 METRIC_NAMES = [
     "precision", "recall", "specificity", "accuracy",
     "fpr", "fnr", "f1", "csi", "mean_abs_error", "median_abs_error",
@@ -50,8 +52,8 @@ def compute_metrics_at_threshold(
     replicate can be dropped rather than counted as zero; with False it returns
     0.0, reproducing `sklearn`'s `zero_division=0` for the point estimate.
     """
-    reported_bin = (df[target_col] > threshold).astype(int)
-    predicted_bin = (df[pred_col] > threshold).astype(int)
+    reported_bin = exceeds(df[target_col], threshold).astype(int)
+    predicted_bin = exceeds(df[pred_col], threshold).astype(int)
 
     TP = int(((predicted_bin == 1) & (reported_bin == 1)).sum())
     TN = int(((predicted_bin == 0) & (reported_bin == 0)).sum())
