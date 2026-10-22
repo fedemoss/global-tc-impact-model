@@ -11,6 +11,7 @@ from sklearn.metrics import (
 )
 import os
 from src.config import OUTPUT_DIR
+from src.evaluation.aggregation import categorise
 from src.evaluation.bootstrap import bootstrap_binary_metrics, compute_metrics_at_threshold
 
 def compute_binary_metrics(df, target_col="perc_affected_pop_grid_region", pred_col="prediction_perc", thresholds=[0, 15], model_name=None):
@@ -30,13 +31,8 @@ def compute_binary_metrics(df, target_col="perc_affected_pop_grid_region", pred_
     return pd.DataFrame(results)
 
 def categorize_values(series):
-    """
-    Categorize numeric values into 3 ordinal categories:
-    0: (-inf, 0]
-    1: (0, 15]
-    2: (15, inf)
-    """
-    return pd.cut(series, bins=[-np.inf, 0, 15, np.inf], labels=[0, 1, 2]).astype(int)
+    """The three ordinal impact categories, as the rest of the evaluation defines them."""
+    return categorise(series)
 
 def compute_distance_metrics(models_dict, target_col="perc_affected_pop_grid_region", pred_col="prediction_perc"):
     """

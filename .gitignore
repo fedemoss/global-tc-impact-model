@@ -178,3 +178,6 @@ download_srtm_tiles_old.py
 
 # Internal working notes, kept locally.
 /RERUN_CHECKLIST.md
+
+# The manuscript's tables are built here but belong to the paper, not the code.
+/visualization/paper_tables.ipynb
