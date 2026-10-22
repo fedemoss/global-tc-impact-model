@@ -5,6 +5,7 @@ one definition of what a model output is and how a prediction is categorised,
 and so that the plotting, which is the bulk of the code, does not crowd out
 the analysis.
 """
+import json
 import os
 
 import numpy as np
@@ -12,7 +13,8 @@ import pandas as pd
 
 from src.config import OUTPUT_DIR
 from src.evaluation.aggregation import (IMPACT_THRESHOLD_HIGH,
-                                        IMPACT_THRESHOLD_LOW, exceeds)
+                                        IMPACT_THRESHOLD_LOW, categorise,
+                                        exceeds)
 
 MODEL_ORDER = ["historical", "windspeed-exposed", "windspeed-historical",
                "2-stage-XGBoost"]
@@ -522,3 +524,284 @@ def plot_cumulative_events(df, from_year=2012, savefig=None):
     if savefig:
         plt.savefig(savefig, dpi=300, bbox_inches="tight", pad_inches=0.2)
     return fig, cumulative
+
+
+# --------------------------------------------------------------------------
+# Case-study maps
+#
+# One row per event: what was reported beside what each model predicted, over
+# the same units and the same extent, so the three panels differ only in the
+# quantity they colour.
+# --------------------------------------------------------------------------
+#: The paper's impact bands, and the colour each is drawn in. The first band
+#: is "no impact" rather than a range, so the bins open just below zero.
+BAND_EDGES = [-0.1, 0, IMPACT_THRESHOLD_HIGH, 50, 100]
+BAND_LABELS = ["0", f"0-{IMPACT_THRESHOLD_HIGH}", f"{IMPACT_THRESHOLD_HIGH}-50",
+               "50-100"]
+BAND_COLORS = {BAND_LABELS[0]: "white", BAND_LABELS[1]: "#ffcccc",
+               BAND_LABELS[2]: "#ff6666", BAND_LABELS[3]: "#990000"}
+PANEL_TITLES = ["Reported Impact", "Windspeed-exposed", "2-Stage-XGBoost"]
+TRACK_COLOR = "purple"
+
+
+def band(values):
+    """The impact band each value falls in, as a categorical."""
+    return pd.cut(values, bins=BAND_EDGES, labels=BAND_LABELS, include_lowest=True)
+
+
+def band_colors(bands):
+    """Face colours for a column of bands, defaulting to the no-impact colour."""
+    return [BAND_COLORS.get(b, "white") for b in bands]
+
+
+def adm1_geometries(path=None, rebuild=False):
+    """Administrative units, with each country's outline alongside them.
+
+    GADM is distributed at admin-2, so the admin-1 units are dissolved from it
+    once and cached. A country whose admin-1 units are smaller than a grid cell
+    is evaluated whole, under a GID_1 equal to its ISO3 code, so each country
+    outline is carried under that key and the two kinds of unit join alike.
+    """
+    import geopandas as gpd
+
+    from src.config import INPUT_DIR
+
+    path = path or OUTPUT_DIR / "SHP" / "adm1_dissolved.gpkg"
+    if rebuild or not path.exists():
+        adm2 = gpd.read_file(INPUT_DIR / "SHP" / "global_shapefile_GID_adm2.gpkg",
+                             columns=["GID_0", "GID_1", "geometry"])
+        units = adm2.dissolve(by=["GID_0", "GID_1"], as_index=False)
+        units = units[["GID_0", "GID_1", "geometry"]]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        units.to_file(path, driver="GPKG")
+    else:
+        units = gpd.read_file(path)
+
+    whole = units.dissolve(by="GID_0", as_index=False)[["GID_0", "geometry"]]
+    whole["GID_1"] = whole["GID_0"]
+    return units, pd.concat([units, whole], ignore_index=True)
+
+
+def storm_track(sid):
+    """The storm's best track as a single line, for drawing over a map."""
+    import geopandas as gpd
+    from climada.hazard import TCTracks
+    from shapely.geometry import LineString
+
+    track = TCTracks.from_ibtracs_netcdf(storm_id=sid).get_track()
+    points = gpd.points_from_xy(track.lon.values, track.lat.values)
+    return gpd.GeoDataFrame(geometry=[LineString(points)], crs="EPSG:4326")
+
+
+def case_study_panels(disno, joinable, suffix="", windspeed_bundle=None):
+    """One event's units, carrying the reported value and both predictions."""
+    folder = OUTPUT_DIR / "model_output" / f"2-stage-XGBoost_global_adm1{suffix}"
+    xgb = pd.read_csv(folder / f"predictions_event_{disno}.csv")
+    xgb = xgb[["GID_0", "GID_1", "reported", "predicted"]]
+
+    if windspeed_bundle is None:
+        windspeed_bundle = pd.read_parquet(
+            OUTPUT_DIR / "model_output" / "windspeed-exposed_global_adm1.parquet")
+    wind = windspeed_bundle[windspeed_bundle["DisNo."] == disno]
+    wind = wind[["GID_0", "GID_1", "predicted"]].rename(
+        columns={"predicted": "predicted_wind"})
+
+    g = joinable.merge(xgb, on=["GID_0", "GID_1"], how="inner")
+    g = g.merge(wind, on=["GID_0", "GID_1"], how="left")
+    # A unit the rule never scored is a unit it predicted no impact for.
+    g["predicted_wind"] = g["predicted_wind"].fillna(0)
+    g = g[g.geometry.notnull() & g.is_valid]
+    for column, source in (("band_reported", "reported"),
+                           ("band_wind", "predicted_wind"),
+                           ("band_xgb", "predicted")):
+        g[column] = band(g[source])
+    return g
+
+
+def plot_case_studies(cases, suffix="", extents=None, pad=1.5, savefig=None,
+                      caption_size=15, title_size=13):
+    """A figure of case studies, three panels across and one case per row.
+
+    `cases` is a sequence of (DisNo., sid, caption). `extents` frames a case
+    explicitly as (minx, miny, maxx, maxy); a case left out of it is framed on
+    the units it affected, padded by `pad` degrees.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+
+    extents = extents or {}
+    units, joinable = adm1_geometries()
+    windspeed = pd.read_parquet(
+        OUTPUT_DIR / "model_output" / "windspeed-exposed_global_adm1.parquet")
+
+    fig, axes = plt.subplots(len(cases), 3, figsize=(11, 3.1 * len(cases)),
+                             squeeze=False)
+
+    for row, (disno, sid, caption) in enumerate(cases):
+        g = case_study_panels(disno, joinable, suffix, windspeed)
+
+        if disno in extents:
+            minx, miny, maxx, maxy = extents[disno]
+        else:
+            hit = g[(g["reported"] > 0) | (g["predicted"] > 0)
+                    | (g["predicted_wind"] > 0)]
+            b = (hit if len(hit) else g).total_bounds
+            minx, miny, maxx, maxy = b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad
+
+        # Neighbours are drawn for orientation only, so the country under
+        # study is left to the coloured layer.
+        iso3 = disno.split("-")[-1]
+        context = units.cx[minx:maxx, miny:maxy]
+        context = context[context["GID_0"] != iso3]
+        try:
+            track = storm_track(sid)
+        except Exception:                                    # noqa: BLE001
+            track = None
+
+        for col, column in enumerate(("band_reported", "band_wind", "band_xgb")):
+            ax = axes[row][col]
+            context.plot(ax=ax, color="lightgray", edgecolor="black", linewidth=0.25)
+            g.plot(ax=ax, color=band_colors(g[column]), edgecolor="black",
+                   linewidth=0.4)
+            if track is not None:
+                track.plot(ax=ax, color=TRACK_COLOR, linewidth=1.8)
+            ax.set_xlim(minx, maxx)
+            ax.set_ylim(miny, maxy)
+            ax.set_aspect("equal")
+            ax.axis("off")
+            if row == 0:
+                ax.set_title(PANEL_TITLES[col], size=title_size, pad=12)
+
+        middle = axes[row][1]
+        middle.text(0.5, -0.08, f"({chr(97 + row)}) {caption}",
+                    transform=middle.transAxes, ha="center", va="top",
+                    size=caption_size)
+
+    handles = [Patch(facecolor=BAND_COLORS[l], edgecolor="black", label=l)
+               for l in BAND_LABELS]
+    handles.append(Line2D([0], [0], color=TRACK_COLOR, lw=1.8, label="Storm Track"))
+    axes[-1][0].legend(handles=handles, title="Impact (%)", loc="lower left",
+                       fontsize=8, title_fontsize=9, framealpha=0.95)
+
+    fig.subplots_adjust(hspace=0.28, wspace=0.02)
+    if savefig:
+        fig.savefig(savefig, dpi=300, bbox_inches="tight", pad_inches=0.25)
+    return fig
+
+
+# --------------------------------------------------------------------------
+# Stage-wise SHAP
+# --------------------------------------------------------------------------
+#: Model column -> the name the manuscript gives the feature.
+FEATURE_DISPLAY = {
+    "wind_speed": "WEA_wind_speed",
+    "rainfall_max_24h": "WEA_rainfall_max_24h",
+    "population": "total_pop",
+    "coast_length_meters": "TOP_coast_length",
+    "with_coast": "TOP_with_coast",
+    "mean_elev": "TOP_mean_elevation_m",
+    "mean_slope": "TOP_mean_slope",
+    "mean_rug": "TOP_mean_rug",
+    "urban": "URB_urban",
+    "rural": "URB_rural",
+    "water": "URB_water",
+    "storm_tide_rp_0010": "SH_storm_tides",
+    "landslide_risk_sum": "SH_landslides_risk",
+    "N_events_5_years": "prev_events_5years",
+}
+
+
+def tree_shap(model, X):
+    """Exact TreeSHAP contributions, from the booster itself.
+
+    XGBoost computes these natively, which also avoids shap's own model
+    reader: it cannot parse the base score this XGBoost version writes. The
+    bias arrives in the final column and is dropped, and the values are in the
+    model's margin space -- log-odds for the classifier, predicted percentage
+    for the regressor.
+    """
+    import xgboost as xgb
+
+    booster = model.get_booster()
+    contribs = booster.predict(
+        xgb.DMatrix(X, feature_names=list(X.columns)), pred_contribs=True)
+    return contribs[:, :-1]
+
+
+def plot_shap_summary(model, X, savefig=None, max_display=None):
+    """A beeswarm summary, labelled with the manuscript's feature names."""
+    import matplotlib.pyplot as plt
+    import shap
+
+    values = tree_shap(model, X)
+    # The booster validates the names it was trained with, so only the plot
+    # carries the published ones.
+    plt.figure()
+    shap.summary_plot(values, X.rename(columns=FEATURE_DISPLAY), show=False,
+                      max_display=max_display or X.shape[1])
+    fig = plt.gcf()
+    fig.set_size_inches(8, 7)
+    plt.xlabel("SHAP value (impact on model output)")
+    plt.tight_layout()
+    if savefig:
+        fig.savefig(savefig, dpi=300, bbox_inches="tight")
+    return fig, values
+
+
+def shap_inputs(run_folder, n_sample=60000, random_state=42):
+    """Each stage's model and the rows it scores.
+
+    Stage 1 ranks every grid cell, while stage 2 only ever sees the cells
+    stage 1 flagged, so the regressor is explained over that subset: scoring
+    it over all cells would describe inputs it never meets.
+    """
+    import joblib
+
+    from src.config import FEATURES, HYPERPARAMETERS_PATH, INPUT_DIR
+
+    classifier = joblib.load(run_folder / "classifier.joblib")
+    regressor = joblib.load(run_folder / "regressor.joblib")
+    threshold = json.loads(HYPERPARAMETERS_PATH.read_text())["clf_threshold"]
+
+    cells = pd.read_parquet(
+        INPUT_DIR / "model_input_dataset" / "training_dataset.parquet",
+        columns=FEATURES)
+    X = cells.sample(n=min(n_sample, len(cells)),
+                     random_state=random_state)[FEATURES].astype("float32")
+    flagged = classifier.predict_proba(X)[:, 1] >= threshold
+    return (classifier, X), (regressor, X[flagged]), threshold
+
+
+# --------------------------------------------------------------------------
+# Resampling
+# --------------------------------------------------------------------------
+def bootstrap_over_events(df, metric_fn, event_col="sid", n_boot=1000, ci=95,
+                          random_state=42):
+    """Point estimates and percentile intervals, resampling whole events.
+
+    Units struck by one storm share a hazard field and a single report, so the
+    storm is the unit drawn: resampling rows would treat them as independent
+    and give intervals far narrower than the number of storms supports.
+    """
+    point = metric_fn(df)
+    rng = np.random.default_rng(random_state)
+    events = df[event_col].unique()
+    groups = {event: group for event, group in df.groupby(event_col, observed=True)}
+
+    draws = {k: [] for k in point}
+    for _ in range(n_boot):
+        drawn = rng.choice(events, size=len(events), replace=True)
+        replicate = pd.concat([groups[e] for e in drawn], ignore_index=True)
+        for k, v in metric_fn(replicate).items():
+            if v is not None and not (isinstance(v, float) and np.isnan(v)):
+                draws[k].append(v)
+
+    low, high = (100 - ci) / 2, 100 - (100 - ci) / 2
+    out = {}
+    for k, value in point.items():
+        drawn = np.asarray(draws[k], dtype=float)
+        out[k] = (value,
+                  float(np.percentile(drawn, low)) if drawn.size else np.nan,
+                  float(np.percentile(drawn, high)) if drawn.size else np.nan)
+    return out
