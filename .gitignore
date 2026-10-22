@@ -8,6 +8,13 @@ __pycache__/
 /data/*
 !/data/model_hyperparameters.json
 
+# Figures, which the notebooks regenerate from the model output. The note in
+# each folder stays, since it records what the run behind those figures was.
+/visualization/figs/*
+!/visualization/figs/README.md
+/visualization/figs_v2/*
+!/visualization/figs_v2/README.md
+
 # Distribution / packaging
 .Python
 build/
