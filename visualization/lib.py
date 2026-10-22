@@ -323,11 +323,28 @@ def load_variant(folder_name, level="adm1"):
     folder = base / folder_name
     bundle = folder.with_suffix(".parquet")
     if bundle.exists():
-        return pd.read_parquet(bundle)
+        return _with_comparison_columns(pd.read_parquet(bundle))
     files = sorted(folder.glob("predictions_event_*.csv"))
     if not files:
         return None
-    return pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+    return _with_comparison_columns(
+        pd.concat([pd.read_csv(f) for f in files], ignore_index=True))
+
+
+def _with_comparison_columns(df):
+    """Give a variant the reported/predicted pair every comparison here reads.
+
+    A run fitted at ADM1 is scored where it was fitted, so it carries the
+    model's own column names. A grid run reaches ADM1 through the aggregation,
+    which renames them. Both are a reported and a predicted share of a
+    population, and both are bounded by it.
+    """
+    if "reported" in df.columns or "perc_affected_pop_grid_region" not in df.columns:
+        return df
+    df = df.copy()
+    df["reported"] = df["perc_affected_pop_grid_region"].clip(0, 100)
+    df["predicted"] = df["prediction_perc"].clip(0, 100)
+    return df
 
 
 def load_variants(variants=None, level="adm1"):
