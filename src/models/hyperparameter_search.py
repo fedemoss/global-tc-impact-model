@@ -225,7 +225,7 @@ def event_severity_labels(df, target_name=TARGET_NAME):
     def categorize(x):
         if x == 0:
             return 0
-        return 1 if x <= IMPACT_THRESHOLD_HIGH else 2
+        return 1 if x < IMPACT_THRESHOLD_HIGH else 2
     return df.groupby("sid", observed=True)[target_name].max().apply(categorize)
 
 
@@ -281,8 +281,8 @@ def fit_stage1(df_train, features, clf_params, u1):
 def fit_stage2(df_train, features, reg_params, u2):
     """Regressor fitted on observed positives, u2-rebalanced - threshold-free."""
     df_high = df_train[df_train[TARGET_NAME] > 0].copy()
-    # Strictly > 15, matching the paper's category definition.
-    df_high["impact_high"] = (df_high[TARGET_NAME] > IMPACT_THRESHOLD_HIGH).astype(int)
+    # Inclusive: the paper's high class is >= 15% (15 itself is high).
+    df_high["impact_high"] = (df_high[TARGET_NAME] >= IMPACT_THRESHOLD_HIGH).astype(int)
     n_minority = int(df_high["impact_high"].sum())
     n_majority = int((df_high["impact_high"] == 0).sum())
     balanced = TwoStageXGBoost.oversample(df_high, target="impact_high", u=u2)
@@ -346,8 +346,13 @@ def score_thresholds(cells, thresholds=CLF_THRESHOLDS):
         row = {"clf_threshold": float(threshold), "n_adm1": int(len(grouped)),
                "mae": float(np.abs(reported - predicted[:, k]).mean())}
         for suffix, cut in (("", IMPACT_THRESHOLD_LOW), ("_high", IMPACT_THRESHOLD_HIGH)):
-            y_true = reported > cut
-            y_pred = predicted[:, k] > cut
+            # any impact: strictly > 0; severe: inclusive (high = >= 15%)
+            if cut > 0:
+                y_true = reported >= cut
+                y_pred = predicted[:, k] >= cut
+            else:
+                y_true = reported > cut
+                y_pred = predicted[:, k] > cut
             tp = int(np.sum(y_true & y_pred))
             fp = int(np.sum(~y_true & y_pred))
             fn = int(np.sum(y_true & ~y_pred))

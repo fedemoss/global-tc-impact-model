@@ -50,8 +50,16 @@ def compute_metrics_at_threshold(
     replicate can be dropped rather than counted as zero; with False it returns
     0.0, reproducing `sklearn`'s `zero_division=0` for the point estimate.
     """
-    reported_bin = (df[target_col] > threshold).astype(int)
-    predicted_bin = (df[pred_col] > threshold).astype(int)
+    # The paper's convention: any impact is strictly > 0, while the severe
+    # class INCLUDES its boundary (high = >= 15%). At threshold 0 inclusive
+    # would be meaningless (everything >= 0), so the comparison is inclusive
+    # exactly when the threshold is positive.
+    if threshold > 0:
+        reported_bin = (df[target_col] >= threshold).astype(int)
+        predicted_bin = (df[pred_col] >= threshold).astype(int)
+    else:
+        reported_bin = (df[target_col] > threshold).astype(int)
+        predicted_bin = (df[pred_col] > threshold).astype(int)
 
     TP = int(((predicted_bin == 1) & (reported_bin == 1)).sum())
     TN = int(((predicted_bin == 0) & (reported_bin == 0)).sum())

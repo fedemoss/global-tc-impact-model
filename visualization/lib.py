@@ -80,9 +80,8 @@ def load_all(strategy="global", level="adm1", models=MODEL_ORDER):
 
 
 def categorise(series, low=IMPACT_THRESHOLD_LOW, high=IMPACT_THRESHOLD_HIGH):
-    """0 = no impact, 1 = up to `high`%, 2 = above `high`%."""
-    return pd.cut(series, bins=[-np.inf, low, high, np.inf],
-                  labels=[0, 1, 2]).astype(int)
+    """0 = no impact, 1 = below `high`%, 2 = at or above `high`% (boundary is high)."""
+    return np.select([series <= low, series < high], [0, 1], default=2)
 
 
 def coverage(models_dict, keys=("DisNo.", "GID_1")):

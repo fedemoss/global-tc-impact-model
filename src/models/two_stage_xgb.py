@@ -145,10 +145,10 @@ class TwoStageXGBoost:
 
         # Stage 2: Regression
         df_train_high = df_train[df_train[self.target_name] > 0].copy()
-        # Strictly > 15, matching the paper's category definition (> 15% = high);
+        # Inclusive: the paper's high class is >= 15% (15 itself is high);
         # rows exactly at 15.0 are vanishingly rare, so this aligns notation
         # rather than changing behaviour.
-        df_train_high["impact_high"] = (df_train_high[self.target_name] > 15).astype(int)
+        df_train_high["impact_high"] = (df_train_high[self.target_name] >= 15).astype(int)
         
         df_train_balanced_2 = self.oversample(df_train_high, target="impact_high", u=u2)
         

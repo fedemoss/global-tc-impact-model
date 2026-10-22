@@ -33,10 +33,11 @@ def categorize_values(series):
     """
     Categorize numeric values into 3 ordinal categories:
     0: (-inf, 0]
-    1: (0, 15]
+    1: (0, 15)  -- the boundary belongs to the high class
     2: (15, inf)
     """
-    return pd.cut(series, bins=[-np.inf, 0, 15, np.inf], labels=[0, 1, 2]).astype(int)
+    # no-impact: 0; low: 0 < f < 15; high: f >= 15 (the boundary is high).
+    return np.select([series <= 0, series < 15], [0, 1], default=2)
 
 def compute_distance_metrics(models_dict, target_col="perc_affected_pop_grid_region", pred_col="prediction_perc"):
     """
