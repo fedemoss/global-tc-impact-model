@@ -14,6 +14,7 @@ informed about rain than a forecaster would have been, and the wind is the
 only quantity whose uncertainty is represented.
 """
 import logging
+from pathlib import Path
 
 import pandas as pd
 
@@ -95,30 +96,55 @@ def predict_event(disno, sid, iso3, event_name, dataset=None, model=None,
     return predictions
 
 
-def predict_all(events, dataset=None, provider=None, lead_hours=None,
-                min_lead=0):
+def predict_all(events, out_dir, dataset=None, provider=None, lead_hours=None,
+                min_lead=0, recompute=False):
     """Forecast-time predictions for every event in `events`.
 
     `events` carries `DisNo.`, `sid`, `iso3` and the event's name. The dataset
     is read once and reused, the fitting being per storm rather than per
     forecast.
+
+    Each event is written as it finishes rather than held until the end.
+    Every event contributes tens of thousands of grid predictions, so keeping
+    them all alongside the training frame costs more memory than the fitting
+    itself; writing as we go also makes the run resumable.
     """
+    import gc
+
     dataset = prepare_data() if dataset is None else dataset
-    frames = []
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    done, failed = 0, []
     for _, row in events.iterrows():
+        disno = row["DisNo."]
+        target = out_dir / f"forecast_{disno}.parquet"
+        if target.exists() and not recompute:
+            done += 1
+            continue
         try:
-            out = predict_event(row["DisNo."], row["sid"], row["iso3"],
+            out = predict_event(disno, row["sid"], row["iso3"],
                                 row["Event Name"], dataset=dataset,
                                 provider=provider, lead_hours=lead_hours,
                                 min_lead=min_lead)
         except Exception as e:                                   # noqa: BLE001
-            logger.warning(f"{row['DisNo.']}: prediction failed ({e})")
+            logger.warning(f"{disno}: prediction failed ({e})")
+            failed.append(disno)
             continue
         if not out.empty:
-            frames.append(out)
+            out.to_parquet(target, index=False)
+            done += 1
+        del out
+        gc.collect()
 
-    if not frames:
+    logger.info(f"{done} events predicted into {out_dir}"
+                + (f"; {len(failed)} failed" if failed else ""))
+    return done
+
+
+def compile_predictions(out_dir):
+    """The per-event predictions as one frame, read back from disk."""
+    files = sorted(Path(out_dir).glob("forecast_*.parquet"))
+    if not files:
         return pd.DataFrame()
-    out = pd.concat(frames, ignore_index=True)
-    logger.info(f"{out['DisNo.'].nunique()} events predicted, {len(out):,} rows")
-    return out
+    return pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)

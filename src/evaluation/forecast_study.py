@@ -19,7 +19,7 @@ from src.collectors.forecast_collector import (DEFAULT_PROVIDER,
                                                collect_all_forecasts,
                                                event_windows, forecast_root)
 from src.config import INPUT_DIR, OUTPUT_DIR
-from src.models.forecast_model import predict_all
+from src.models.forecast_model import compile_predictions, predict_all
 
 logger = logging.getLogger(__name__)
 
@@ -80,14 +80,17 @@ def run_forecast_study(provider=DEFAULT_PROVIDER, lead_hours=120.0,
         logger.warning("no events with collected forecasts; nothing to predict")
         return pd.DataFrame()
 
-    predictions = predict_all(events, provider=provider, lead_hours=lead_hours,
-                              min_lead=min_lead)
-    if predictions.empty:
-        logger.warning("no forecast predictions produced")
-        return predictions
-
     out_dir = OUTPUT_DIR / "forecast_study" / provider
-    out_dir.mkdir(parents=True, exist_ok=True)
+    events_dir = out_dir / "events"
+    n = predict_all(events, events_dir, provider=provider,
+                    lead_hours=lead_hours, min_lead=min_lead)
+    if not n:
+        logger.warning("no forecast predictions produced")
+        return pd.DataFrame()
+
+    # Compiled once at the end, from what reached disk, so an interrupted run
+    # keeps the events it finished.
+    predictions = compile_predictions(events_dir)
     path = out_dir / "grid_predictions.parquet"
     predictions.to_parquet(path, index=False)
     logger.info(f"{predictions['DisNo.'].nunique()} events, "
