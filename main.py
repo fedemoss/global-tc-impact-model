@@ -5,6 +5,8 @@ from src.config import INPUT_DIR, IMERG_PRODUCT, IMERG_PRODUCTS
 
 # Collectors
 from src.collectors.general_collector import download_all_public_data
+from src.collectors.forecast_collector import (DEFAULT_PROVIDER,
+                                               PROVIDERS as FORECAST_PROVIDERS)
 
 # Grid
 from src.static_features.grid_cells import main_grid_generation
@@ -106,6 +108,21 @@ def main():
                              "only on cyclones preceding the test one, and "
                              "'geo_constrained' only on cyclones in the same basin. "
                              "Each writes to its own output folder")
+    parser.add_argument("--collect-forecasts", action="store_true",
+                        help="Download archived ensemble cyclone-track "
+                             "forecasts for the events the model is evaluated "
+                             "on. Resumable: cycles already on disk are kept")
+    parser.add_argument("--run-forecast-study", action="store_true",
+                        help="Predict impact from each archived forecast "
+                             "cycle, leaving the storm out of training")
+    parser.add_argument("--forecast-provider", default=DEFAULT_PROVIDER,
+                        choices=sorted(FORECAST_PROVIDERS),
+                        help="Which centre's ensemble to use. Coverage of the "
+                             "event set differs widely between them, and only "
+                             "ECMWF reaches before 2008")
+    parser.add_argument("--forecast-lead-hours", type=float, default=120.0,
+                        help="How far into each forecast to follow a member, "
+                             "in hours")
     parser.add_argument("--predict-unit", choices=["DisNo.", "sid"], default="DisNo.",
                         help="Unit predicted per cross-validation fold: the "
                              "country-event record impact is reported at "
@@ -210,6 +227,20 @@ def main():
             # rather than split per event.
             logging.info("Science: Scoring the reference baselines...")
             build_all_baselines()
+
+    if args.collect_forecasts or args.run_forecast_study:
+        from src.evaluation.forecast_study import (collect_study_forecasts,
+                                                   run_forecast_study)
+        events = None
+        if args.collect_forecasts:
+            logging.info(f"Forecasts: collecting from "
+                         f"{args.forecast_provider}...")
+            events = collect_study_forecasts(provider=args.forecast_provider)
+        if args.run_forecast_study:
+            logging.info("Forecasts: predicting impact from each cycle...")
+            run_forecast_study(provider=args.forecast_provider,
+                               lead_hours=args.forecast_lead_hours,
+                               events=events)
 
     if args.run_interpretability:
         logging.info("Science: Running SHAP Analysis...")
