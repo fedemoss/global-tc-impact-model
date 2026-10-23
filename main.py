@@ -166,6 +166,7 @@ def main():
     # the full factory, but `--run-models` alone no longer downloads the world.
     build_dataset = args.build_dataset or args.stage is not None or not (
         args.run_models or args.run_interpretability
+        or args.collect_forecasts or args.run_forecast_study
     )
 
     # --- DATA PIPELINE ---
