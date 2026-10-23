@@ -90,10 +90,35 @@ def predict_event(disno, sid, iso3, event_name, dataset=None, model=None,
                 f"{test['ensemble_member'].nunique()} members")
 
     model = TwoStageXGBoost(features=list(FEATURES)) if model is None else model
-    predictions = model.train_and_predict(train, test)
+    predictions = _predict_in_batches(model, train, test)
     predictions["DisNo."] = disno
     predictions["sid"] = sid
     return predictions
+
+
+#: Above this many rows the forecasts of one event are predicted a cycle at a
+#: time. A country's cell count varies by three orders of magnitude, so an
+#: event over a large country carries a test frame many times the training
+#: frame's size, which is what exhausts memory rather than the fitting.
+MAX_TEST_ROWS = 2_000_000
+
+
+def _predict_in_batches(model, train, test, max_rows=MAX_TEST_ROWS):
+    """Predict an event's forecasts, a cycle at a time when it is large."""
+    import gc
+
+    if len(test) <= max_rows:
+        return model.train_and_predict(train, test)
+
+    cycles = sorted(test["cycle"].unique())
+    logger.info(f"{len(test):,} rows exceeds {max_rows:,}; predicting "
+                f"{len(cycles)} cycles separately")
+    parts = []
+    for cycle in cycles:
+        part = model.train_and_predict(train, test[test["cycle"] == cycle])
+        parts.append(part)
+        gc.collect()
+    return pd.concat(parts, ignore_index=True)
 
 
 def predict_all(events, out_dir, dataset=None, provider=None, lead_hours=None,
