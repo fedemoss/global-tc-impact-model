@@ -504,22 +504,34 @@ def plot_rolling_comparison(walk, loocv, from_date="2005-01-01", savefig=None):
 
 
 def plot_cumulative_events(df, from_year=2012, savefig=None):
-    """Cyclones available to train on, accumulating over the record."""
+    """What each evaluation has to train on, as the record accumulates.
+
+    Walk-forward can only use what preceded the storm being predicted, so its
+    training set grows year by year. Leave-one-out uses the whole record
+    whatever the year, which is the flat line: the gap between the two is the
+    advantage the ordinary evaluation takes from knowing the future.
+    """
     import matplotlib.pyplot as plt
 
     per_year = df.groupby("year")["DisNo."].nunique()
     cumulative = per_year.cumsum()
     cumulative = cumulative[cumulative.index >= from_year]
+    total = df["DisNo."].nunique()
 
     fig, ax = plt.subplots(figsize=(10, 3))
-    ax.plot(cumulative.index, cumulative.values, marker="o", linestyle="-",
-            color="#C5C4C3", linewidth=2, label="Training Data")
+    ax.plot(cumulative.index, cumulative.values, marker="", linestyle="-",
+            color=COLOR_WALK_FORWARD, linewidth=3, alpha=0.7,
+            label="Training Data (Walk-Forward)")
+    ax.hlines(y=total, xmin=cumulative.index.min(), xmax=cumulative.index.max(),
+              linestyle="-", color=COLOR_LOOCV, linewidth=2, alpha=0.7,
+              label="Training Data (LOOCV)")
     ax.set_ylabel("TCs", fontsize=15)
     ax.set_xlabel("Year", fontsize=15)
     ax.tick_params(axis="x", labelsize=12)
     ax.tick_params(axis="y", labelsize=12)
     ax.grid(True, linestyle="--", alpha=0.6)
-    ax.legend(loc="upper left", fontsize=15, frameon=True)
+    ax.legend(loc="lower right", fontsize=15, frameon=True)
+    ax.set_ylim(0, total * 1.06)
     plt.tight_layout()
     if savefig:
         plt.savefig(savefig, dpi=300, bbox_inches="tight", pad_inches=0.2)
@@ -867,7 +879,7 @@ def plot_threshold_sweep(sweep, savefig=None, share_col="share_above"):
     ax2.bar(sweep["threshold"], 100 - above, bottom=above, width=1.6,
             color="#f5c6c6", alpha=0.85, label="Below threshold")
     ax2.set_xlabel("High-Impact Threshold", fontsize=13)
-    ax2.set_ylabel("% of ADM1 regions", fontsize=13)
+    ax2.set_ylabel("% of ADM1–event observations", fontsize=13)
     ax2.set_ylim(0, 100)
     ax2.legend(fontsize=11, frameon=True)
     ax2.grid(True, alpha=0.2, linewidth=0.5, axis="y")
