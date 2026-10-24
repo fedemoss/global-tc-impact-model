@@ -19,7 +19,7 @@ from src.collectors.forecast_collector import (DEFAULT_PROVIDER,
                                                collect_all_forecasts,
                                                event_windows, forecast_root)
 from src.config import INPUT_DIR, OUTPUT_DIR
-from src.models.forecast_model import compile_predictions, predict_all
+from src.models.forecast_model import predict_all, write_compiled
 
 logger = logging.getLogger(__name__)
 
@@ -90,12 +90,10 @@ def run_forecast_study(provider=DEFAULT_PROVIDER, lead_hours=120.0,
 
     # Compiled once at the end, from what reached disk, so an interrupted run
     # keeps the events it finished.
-    predictions = compile_predictions(events_dir)
     path = out_dir / "grid_predictions.parquet"
-    predictions.to_parquet(path, index=False)
-    logger.info(f"{predictions['DisNo.'].nunique()} events, "
-                f"{len(predictions):,} grid predictions -> {path}")
-    return predictions
+    rows, n_events = write_compiled(events_dir, path)
+    logger.info(f"{n_events} events, {rows:,} grid predictions -> {path}")
+    return path
 
 
 def _collected_counts(provider):

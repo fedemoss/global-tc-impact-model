@@ -116,6 +116,63 @@ class TwoStageXGBoost:
             .reset_index(drop=True)
         )
 
+    def fit(self, df_train, u1=None, u2=None):
+        """Fit both stages on `df_train`.
+
+        Separate from prediction so that a caller holding one training set and
+        several test frames -- the forecast cycles of a single storm, which all
+        withhold the same cyclone -- pays for the fit once rather than per frame.
+
+        `u1` and `u2` fall back to the instance's tuned values. The frame is
+        copied rather than modified in place, so a caller can reuse it across
+        folds without it accumulating helper columns from a previous call.
+        """
+        u1 = u1 if u1 is not None else self.u1
+        u2 = u2 if u2 is not None else self.u2
+
+        df_train = df_train.copy()
+
+        # Stage 1: Classification
+        df_train["reported_bin"] = (df_train[self.target_name] > 0).astype(int)
+        df_train_balanced_1 = self.oversample(df_train, target="reported_bin", u=u1)
+        self.classifier.fit(df_train_balanced_1[self.features], df_train_balanced_1["reported_bin"])
+
+        # Stage 2: Regression
+        df_train_high = df_train[df_train[self.target_name] > 0].copy()
+        # The high-impact class is 15% or more, the boundary belonging to the
+        # band above it, as everywhere else the categories are applied.
+        df_train_high["impact_high"] = (df_train_high[self.target_name] >= 15).astype(int)
+
+        df_train_balanced_2 = self.oversample(df_train_high, target="impact_high", u=u2)
+        self.regressor.fit(df_train_balanced_2[self.features], df_train_balanced_2[self.target_name])
+        return self
+
+    def predict(self, df_test, clf_threshold=None):
+        """Predict with both stages already fitted by `fit`.
+
+        A cell the classifier does not flag is predicted at zero rather than
+        passed to the regressor, which is fitted only on cells that reported
+        some impact.
+        """
+        clf_threshold = clf_threshold if clf_threshold is not None else self.clf_threshold
+
+        df_result = df_test.copy()
+        df_result["reported_bin"] = (df_result[self.target_name] > 0).astype(int)
+
+        y_proba = self.classifier.predict_proba(df_result[self.features])[:, 1]
+        df_result["predicted_proba"] = y_proba
+        df_result["predicted_bin"] = (y_proba >= clf_threshold).astype(int)
+
+        df_stage2_pos = df_result[df_result["predicted_bin"] == 1].copy()
+        df_stage2_neg = df_result[df_result["predicted_bin"] == 0].copy()
+
+        if not df_stage2_pos.empty:
+            df_stage2_pos["prediction_perc"] = self.regressor.predict(df_stage2_pos[self.features])
+
+        df_stage2_neg["prediction_perc"] = 0
+
+        return pd.concat([df_stage2_pos, df_stage2_neg], axis=0).sort_index()
+
     def train_and_predict(self, df_train, df_test, u1=None, u2=None, clf_threshold=None):
         """Executes the custom 2-stage training and prediction flow with oversampling.
 
@@ -124,40 +181,4 @@ class TwoStageXGBoost:
         reuse the same frames across folds without them accumulating helper
         columns from a previous call.
         """
-        u1 = u1 if u1 is not None else self.u1
-        u2 = u2 if u2 is not None else self.u2
-        clf_threshold = clf_threshold if clf_threshold is not None else self.clf_threshold
-
-        df_train = df_train.copy()
-        df_test = df_test.copy()
-
-        # Stage 1: Classification
-        df_train["reported_bin"] = (df_train[self.target_name] > 0).astype(int)
-        df_test["reported_bin"] = (df_test[self.target_name] > 0).astype(int)
-        
-        df_train_balanced_1 = self.oversample(df_train, target="reported_bin", u=u1)
-        self.classifier.fit(df_train_balanced_1[self.features], df_train_balanced_1["reported_bin"])
-        
-        y_proba = self.classifier.predict_proba(df_test[self.features])[:, 1]
-        df_result = df_test.copy()
-        df_result["predicted_proba"] = y_proba
-        df_result["predicted_bin"] = (y_proba >= clf_threshold).astype(int)
-
-        # Stage 2: Regression
-        df_train_high = df_train[df_train[self.target_name] > 0].copy()
-        # The high-impact class is 15% or more, the boundary belonging to the
-        # band above it, as everywhere else the categories are applied.
-        df_train_high["impact_high"] = (df_train_high[self.target_name] >= 15).astype(int)
-        
-        df_train_balanced_2 = self.oversample(df_train_high, target="impact_high", u=u2)
-        
-        df_stage2_pos = df_result[df_result["predicted_bin"] == 1].copy()
-        df_stage2_neg = df_result[df_result["predicted_bin"] == 0].copy()
-        
-        if not df_stage2_pos.empty:
-            self.regressor.fit(df_train_balanced_2[self.features], df_train_balanced_2[self.target_name])
-            df_stage2_pos["prediction_perc"] = self.regressor.predict(df_stage2_pos[self.features])
-            
-        df_stage2_neg["prediction_perc"] = 0
-        
-        return pd.concat([df_stage2_pos, df_stage2_neg], axis=0).sort_index()
+        return self.fit(df_train, u1=u1, u2=u2).predict(df_test, clf_threshold=clf_threshold)
