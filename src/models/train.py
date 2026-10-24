@@ -129,6 +129,10 @@ def prepare_data(aggregate_to_adm1=False):
         })
         groupby_keys = ["DisNo.", "sid", "level", "GID_0", "GID_1", "iso3", "cyclone_basin", "date"]
         df = df.groupby(groupby_keys, dropna=False, observed=True).agg(agg_dict).reset_index()
+        # A unit can be modelled only where it is one: it needs an identity to
+        # be predicted for, and a population for impact to be a share of. Cells
+        # that fall outside every ADM1 boundary carry no unit to aggregate into.
+        df = df[df["GID_1"].notna() & (df["population"] > 0)]
 
     return df.drop_duplicates()
 
