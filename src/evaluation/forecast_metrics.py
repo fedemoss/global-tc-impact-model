@@ -44,6 +44,14 @@ LOWER_Q, UPPER_Q = 0.25, 0.75
 #: further ahead than the last edge are dropped rather than piled into it.
 LEAD_EDGES = tuple(range(0, 132, 12))
 
+#: Support a bin needs before its scores are reported. The archive thins with
+#: lead time, and the longest bins come down to a handful of storms: there,
+#: precision reaches 1.0 on a few calls and recall falls to 0 because nothing
+#: was called at all. Neither is a statement about skill, so a bin that cannot
+#: support one is left unscored rather than drawn.
+MIN_EVENTS = 20
+MIN_POSITIVES = 20
+
 THRESHOLDS = (IMPACT_THRESHOLD_LOW, IMPACT_THRESHOLD_HIGH)
 
 #: Column stems: the two models, each as median and the two quartiles.
@@ -189,11 +197,14 @@ def _scores(reported, predicted, threshold):
     }
 
 
-def metrics_by_lead(table, thresholds=THRESHOLDS, edges=LEAD_EDGES):
+def metrics_by_lead(table, thresholds=THRESHOLDS, edges=LEAD_EDGES,
+                    min_events=MIN_EVENTS, min_positives=MIN_POSITIVES):
     """Precision and recall per lead-time bin, per model, per threshold.
 
     `lead` is the mean lead of the cycles that fell in the bin rather than the
     bin's edge, so a point sits where its forecasts actually were.
+
+    Bins without the support to be scored are dropped; see `MIN_EVENTS`.
     """
     table = table[(table["lead_hours"] >= edges[0])
                   & (table["lead_hours"] < edges[-1])].copy()
@@ -217,7 +228,16 @@ def metrics_by_lead(table, thresholds=THRESHOLDS, edges=LEAD_EDGES):
                 group["reported"], group[f"{model}_median"], threshold)["positives"]
         rows.append(row)
 
-    return (pd.DataFrame(rows)
+    scored = pd.DataFrame(rows)
+    enough = ((scored["events"] >= min_events)
+              & (scored["positives_xgb"] >= min_positives))
+    if not enough.all():
+        thin = scored.loc[~enough, ["threshold", "lead_bin", "events",
+                                    "positives_xgb"]]
+        logger.info(f"{len(thin)} lead bins left unscored for want of support:\n"
+                    f"{thin.to_string(index=False)}")
+
+    return (scored[enough]
             .sort_values(["threshold", "lead_bin"])
             .reset_index(drop=True))
 
