@@ -1,10 +1,14 @@
 """Skill of the forecast-time predictions, read against how early they were made.
 
 The study predicts every grid cell of an event once per ensemble member per
-forecast cycle. This reduces that to something a figure can carry: the ensemble
-is collapsed per cell to a median and an interquartile range, the cells are
-aggregated to the ADM1 units impact is reported at, and precision and recall
-are scored in bins of lead time.
+forecast cycle. This reduces that to something a figure can carry, scoring
+precision and recall in bins of lead time.
+
+The ensemble is summarised in a fixed order of operations, which differs
+between the two quantities on purpose. The central estimate takes the median
+across members at grid level and aggregates that field to ADM1. The band
+aggregates each member to ADM1 first and takes the quartiles across members,
+because a sum of per-cell quantiles is not a quantile of the sum.
 
 Two models are compared on identical forecasts. The two-stage model's
 prediction travels in the study's output; the windspeed-exposed baseline is a
@@ -65,70 +69,85 @@ def _cycles(path):
     return pd.Series(column.to_pandas()).dropna().unique()
 
 
-def _cells_from_members(frame):
-    """One row per grid cell: the ensemble collapsed to a median and quartiles.
+def _member_quantities(frame):
+    """People affected per cell per member, under each model.
 
-    The two models are reduced differently because they are different kinds of
-    object. The two-stage model's prediction is a number per member, so the
-    quantiles are taken over the predictions. The baseline is a rule, so the
-    quantiles are taken over the wind the rule reads and the rule applied to
-    each -- the median of a 0/1 indicator would only ever be 0 or 1.
+    The baseline is a rule rather than a prediction: a cell above the wind
+    threshold has its whole population affected, and the rule is applied to
+    each member's own wind field before anything is collapsed.
     """
     frame = frame.copy()
     frame["prediction_ppl"] = frame["prediction_perc"].clip(0, 100) \
         * frame["population"] / 100
+    frame["wind_ppl"] = np.where(frame["wind_speed"] > WIND_THRESHOLD,
+                                 frame["population"], 0.0)
+    return frame
 
+
+def _central_from_members(frame):
+    """The central estimate: a median across members per cell, then aggregated.
+
+    For the baseline the median is taken over the wind the rule reads and the
+    rule applied to that, rather than over the rule's own output: the median
+    of a 0/1 indicator would only ever be 0 or 1.
+    """
     keys = ADM1_KEYS + ["id"]
-    grouped = frame.groupby(keys, observed=True)
+    cells = frame.groupby(keys, observed=True).agg(
+        pred_ppl=("prediction_ppl", "median"),
+        wind=("wind_speed", "median"),
+        population=("population", "first"),
+        actual_perc=(TARGET, "first"),
+        members=("ensemble_member", "size")).reset_index()
 
-    # All three quantiles of both quantities in one pass. Taken one at a time
-    # through a lambda this is the slowest step in the study by a wide margin.
-    quantiles = (grouped[["prediction_ppl", "wind_speed"]]
-                 .quantile([LOWER_Q, 0.5, UPPER_Q]).unstack())
-    names = {"prediction_ppl": "pred_ppl", "wind_speed": "wind"}
-    labels = {LOWER_Q: "q25", 0.5: "median", UPPER_Q: "q75"}
-    quantiles.columns = [f"{names[var]}_{labels[q]}"
-                         for var, q in quantiles.columns]
-
-    cells = grouped.agg(population=("population", "first"),
-                        actual_perc=(TARGET, "first"),
-                        members=("ensemble_member", "size"))
-    cells = cells.join(quantiles).reset_index()
-
-    # The baseline affects a cell's whole population once the wind passes the
-    # threshold, so its "people affected" is the population or nothing.
-    for q in VARIANTS:
-        wind = cells["wind_median"] if q == "median" else cells[f"wind_{q}"]
-        cells[f"wind_ppl_{q}"] = np.where(wind > WIND_THRESHOLD,
-                                          cells["population"], 0.0)
-
+    cells["wind_ppl"] = np.where(cells["wind"] > WIND_THRESHOLD,
+                                 cells["population"], 0.0)
     cells["actual_ppl"] = cells["actual_perc"] * cells["population"] / 100
-    return cells
 
-
-def _units_from_cells(cells):
-    """Grid cells summed into the ADM1 units impact is reported at."""
-    agg = {f"pred_ppl_{q}": (f"pred_ppl_{q}", "sum") for q in VARIANTS}
-    agg.update({f"wind_ppl_{q}": (f"wind_ppl_{q}", "sum") for q in VARIANTS})
-    agg.update(actual_ppl=("actual_ppl", "sum"),
-               population=("population", "sum"),
-               actual_perc=("actual_perc", "max"),
-               cells=("id", "nunique"),
-               members=("members", "max"))
-
-    units = cells.groupby(ADM1_KEYS, observed=True).agg(**agg).reset_index()
+    units = cells.groupby(ADM1_KEYS, observed=True).agg(
+        pred_ppl=("pred_ppl", "sum"), wind_ppl=("wind_ppl", "sum"),
+        actual_ppl=("actual_ppl", "sum"), population=("population", "sum"),
+        actual_perc=("actual_perc", "max"), cells=("id", "nunique"),
+        members=("members", "max")).reset_index()
     units = units[units["population"] > 0]
     if units.empty:
         return units
 
-    for q in VARIANTS:
-        units[f"xgb_{q}"] = (100 * units[f"pred_ppl_{q}"]
-                             / units["population"]).clip(0, 100)
-        units[f"wind_{q}"] = (100 * units[f"wind_ppl_{q}"]
-                              / units["population"]).clip(0, 100)
+    units["xgb_median"] = (100 * units["pred_ppl"]
+                           / units["population"]).clip(0, 100)
+    units["wind_median"] = (100 * units["wind_ppl"]
+                            / units["population"]).clip(0, 100)
     units["reported"] = units["actual_perc"].clip(0, 100)
-    return units.drop(columns=[f"pred_ppl_{q}" for q in VARIANTS]
-                      + [f"wind_ppl_{q}" for q in VARIANTS])
+    return units.drop(columns=["pred_ppl", "wind_ppl"])
+
+
+def _band_from_members(frame):
+    """The spread: each member aggregated to ADM1, then the quartiles over them.
+
+    Taken in this order rather than as a quantile per cell, because a sum of
+    per-cell quantiles is not a quantile of the sum: it describes a field no
+    member forecast, and understates a unit's total whenever members put their
+    impact in different cells. What a member implies for a whole unit is the
+    quantity whose spread this band is meant to show.
+    """
+    per_member = frame.groupby(ADM1_KEYS + ["ensemble_member"],
+                               observed=True).agg(
+        pred_ppl=("prediction_ppl", "sum"),
+        wind_ppl=("wind_ppl", "sum"),
+        population=("population", "sum")).reset_index()
+    per_member = per_member[per_member["population"] > 0]
+    if per_member.empty:
+        return pd.DataFrame(columns=ADM1_KEYS)
+
+    per_member["xgb"] = (100 * per_member["pred_ppl"]
+                         / per_member["population"]).clip(0, 100)
+    per_member["wind"] = (100 * per_member["wind_ppl"]
+                          / per_member["population"]).clip(0, 100)
+
+    band = (per_member.groupby(ADM1_KEYS, observed=True)[["xgb", "wind"]]
+            .quantile([LOWER_Q, UPPER_Q]).unstack())
+    band.columns = [f"{model}_{'q25' if q == LOWER_Q else 'q75'}"
+                    for model, q in band.columns]
+    return band.reset_index()
 
 
 def event_units(path):
@@ -144,9 +163,11 @@ def event_units(path):
         if frame.empty:
             continue
         lead = frame["lead_hours"].iloc[0]
-        units = _units_from_cells(_cells_from_members(frame))
+        frame = _member_quantities(frame)
+        units = _central_from_members(frame)
         if units.empty:
             continue
+        units = units.merge(_band_from_members(frame), on=ADM1_KEYS, how="left")
         units["cycle"] = cycle
         units["lead_hours"] = lead
         out.append(units)
