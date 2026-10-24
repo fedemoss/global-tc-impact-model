@@ -79,46 +79,53 @@ def predict_event(disno, sid, iso3, event_name, dataset=None, model=None,
         logger.warning(f"{disno}: not in the training dataset")
         return pd.DataFrame()
 
-    test = member_frames(base, fields)
-    if test.empty:
-        return pd.DataFrame()
-
     train = dataset[dataset["sid"].astype(str) != str(sid)]
+    cells = len(base)
+    cycles = sorted(fields["cycle"].unique())
+    members = fields["ensemble_member"].nunique()
     logger.info(f"{disno}: fitting on {len(train):,} cells from "
                 f"{train['sid'].nunique()} cyclones, predicting "
-                f"{test['cycle'].nunique()} cycles x "
-                f"{test['ensemble_member'].nunique()} members")
+                f"{len(cycles)} cycles x {members} members over {cells:,} cells")
 
     model = TwoStageXGBoost(features=list(FEATURES)) if model is None else model
-    predictions = _predict_in_batches(model, train, test)
+    predictions = _predict_by_cycle(model, train, base, fields, cycles,
+                                    cells * members)
     predictions["DisNo."] = disno
     predictions["sid"] = sid
     return predictions
 
 
-#: Above this many rows the forecasts of one event are predicted a cycle at a
-#: time. A country's cell count varies by three orders of magnitude, so an
-#: event over a large country carries a test frame many times the training
+#: Above this many rows per cycle the event is predicted a cycle at a time.
+#: A country's cell count varies by three orders of magnitude, so an event
+#: over a large country carries a test frame several times the training
 #: frame's size, which is what exhausts memory rather than the fitting.
 MAX_TEST_ROWS = 2_000_000
 
 
-def _predict_in_batches(model, train, test, max_rows=MAX_TEST_ROWS):
-    """Predict an event's forecasts, a cycle at a time when it is large."""
+def _predict_by_cycle(model, train, base, fields, cycles, rows_per_cycle,
+                      max_rows=MAX_TEST_ROWS):
+    """Predict an event's forecasts, building each cycle's frame as it is used.
+
+    The frames are built inside the loop rather than up front: an event over a
+    large country spans tens of millions of rows across its cycles, and
+    materialising that before deciding to split it defeats the splitting.
+    """
     import gc
 
-    if len(test) <= max_rows:
-        return model.train_and_predict(train, test)
+    if rows_per_cycle * len(cycles) <= max_rows:
+        return model.train_and_predict(train, member_frames(base, fields))
 
-    cycles = sorted(test["cycle"].unique())
-    logger.info(f"{len(test):,} rows exceeds {max_rows:,}; predicting "
-                f"{len(cycles)} cycles separately")
+    logger.info(f"{rows_per_cycle * len(cycles):,} rows over {len(cycles)} "
+                f"cycles; each is built and predicted on its own")
     parts = []
     for cycle in cycles:
-        part = model.train_and_predict(train, test[test["cycle"] == cycle])
-        parts.append(part)
+        chunk = member_frames(base, fields[fields["cycle"] == cycle])
+        if chunk.empty:
+            continue
+        parts.append(model.train_and_predict(train, chunk))
+        del chunk
         gc.collect()
-    return pd.concat(parts, ignore_index=True)
+    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
 
 def predict_all(events, out_dir, dataset=None, provider=None, lead_hours=None,
