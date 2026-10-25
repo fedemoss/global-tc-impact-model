@@ -29,6 +29,8 @@ GROUPS = {
         "Windspeed-exposed": "windspeed-exposed_global_adm1",
         "Windspeed-historical": "windspeed-historical_global_adm1",
         "2-stg-XGBoost": "2-stage-XGBoost_global_adm1",
+        # Same predictors and protocol, linear stages; skipped until it is run.
+        "2-stg-GLM": "2-stage-GLM_global_adm1",
     },
     "strategies": {
         "LOOCV": "2-stage-XGBoost_global_adm1",
@@ -47,7 +49,7 @@ REPORT = ["precision", "recall", "specificity", "accuracy", "f1", "csi"]
 def load(folder):
     # The rule baselines are not re-run with the model and keep a single
     # set of outputs; every fitted variant follows the run.
-    if folder.startswith("2-stage-XGBoost"):
+    if folder.startswith("2-stage-"):
         folder += SUFFIX
     base = OUTPUT_DIR / "model_output" / folder
     bundle = base.with_suffix(".parquet")

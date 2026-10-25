@@ -23,9 +23,11 @@ If you use this repository or the generated dataset in your research, please cit
 │   ├── collectors/           # Data acquisition (general_collector.py, pps_collector.py)
 │   ├── static_features/      # Spatial Processing (grid_cells.py, process_gadm.py, etc.)
 │   ├── dynamic_features/     # Event-Based Processing (process_emdat.py, process_wind.py, etc.)
-│   ├── models/               # Two-Stage XGBoost & Baselines (train.py), tuning (hyperparameter_search.py)
+│   ├── models/               # Two-Stage XGBoost, two-part GLM & Baselines (train.py),
+│   │                         #   tuning (hyperparameter_search.py, glm_search.py)
 │   ├── evaluation/           # LOOCV (cv_strategies.py), metrics & bootstrap CIs (bootstrap.py),
-│   │                         #   scored results (paper_metrics.py, basin_metrics.py)
+│   │                         #   scored results (paper_metrics.py, basin_metrics.py),
+│   │                         #   paired model differences (model_comparison.py)
 │   ├── interpretability/     # SHAP Analysis & Visualization
 │   ├── utils/                # Shared helpers (geo_utils, logging_setup, time interpolation)
 │   ├── config.py             # Global constants, URLs, and ISO3 List
@@ -192,6 +194,23 @@ The winner is written to `data/model_hyperparameters.json` and **loaded automati
 
 > If you restricted `ISO3_LIST` to a small development subset while testing, point `--input` at a full dataset for the search — a handful of countries leaves too few events, and every one fails the selection filters.
 
+#### The statistical baseline (two-part GLM)
+```bash
+# Tune it on the XGBoost search's own cyclones, folds and objective;
+# writes data/glm_hyperparameters.json (run the XGBoost search first)
+python src/models/glm_search.py
+
+# Also grid the balancing ratios instead of keeping the XGBoost ones
+python src/models/glm_search.py --tune-ratios
+
+# Tiny budget, just to check the plumbing runs
+python src/models/glm_search.py --dry-run
+```
+
+`src/models/two_stage_glm.py` asks whether the learning algorithm matters: it keeps the two-stage structure and the same predictors, training rows, rebalancing, folds and ADM1 aggregation, and replaces the boosted trees with a regularised logistic regression for occurrence and a fractional logistic regression for severity, fitted on cells with reported impact. The hard gate is kept, so the baseline predicts exact zeros like the XGBoost model.
+
+`src/models/glm_search.py` gives it its own tuning under the XGBoost protocol, so that neither model is compared at a configuration chosen for the other. The search pool and held-out cyclones are read from `data/model_hyperparameters.json`, the folds are rebuilt with the same splitter and seed, candidates are scored with the same ADM1 function and selected on the same objective (`f1_high`), and the winner is scored once on the held-out set. Searched: the two regularisation strengths and the stage-1 cutoff. The XGBoost cutoff is not carried over; the GLM picks its own from the same set of cutoffs the XGBoost search scored (`--wide-thresholds` sweeps 0.01 to 0.99, but on `f1_high` alone a very low cutoff can win by a hair by gating nearly every cell, so check the stored curve before preferring one). The ratios stay at the XGBoost model's values unless `--tune-ratios` is given. The JSON also records the XGBoost model's scores on the same pool and held-out set, for a first comparison. Override its location with `TC_IMPACT_GLM_HYPERPARAMETERS`.
+
 ### 4. Validation Metrics with Confidence Intervals
 ```bash
 # Point estimates only (as before)
@@ -222,6 +241,10 @@ python main.py --run-models --train-at adm1
 
 # Leave a feature out, for an ablation
 python main.py --run-models --exclude-features N_events_5_years
+
+# The two-part GLM baseline, through the same folds (or both models in one go)
+python main.py --run-models --models 2-stage-GLM
+python main.py --run-models --models 2-stage-XGBoost 2-stage-GLM
 
 # Generate SHAP Summary and Dependence Plots for the trained model
 python main.py --run-interpretability
@@ -260,6 +283,10 @@ The pipeline engineers the following features for every 0.1° grid cell:
 TC_RUN_SUFFIX=_v2 python src/evaluation/paper_metrics.py
 TC_RUN_SUFFIX=_v2 python src/evaluation/basin_metrics.py
 
+# Paired cyclone bootstrap of a difference between two models (default:
+# 2-stage XGBoost minus the two-part GLM)
+TC_RUN_SUFFIX=_v2 python src/evaluation/model_comparison.py
+
 # Then the notebooks, which only read what those wrote
 TC_RUN_SUFFIX=_v2 jupyter lab visualization/
 ```
@@ -291,6 +318,9 @@ the binary metrics, each model is scored on mean and root-mean-square error and
 on quadratic weighted kappa over those categories, all with 95% intervals from
 resampling whole cyclones.
 
-### 3. Model Interpretability
+### 3. Statistical Baseline
+A two-part generalized linear model with the same structure: logistic regression for whether a cell is affected, then fractional logistic regression (Papke and Wooldridge, 1996) for the affected fraction, zero wherever the first part does not flag the cell. Heavy-tailed predictors enter as `log1p`, and missing values are imputed and predictors standardised inside each fold. Since only the learning algorithm differs, its comparison with the XGBoost model separates the algorithm's contribution from that of the predictors; `model_comparison.py` gives the paired interval of the difference.
+
+### 4. Model Interpretability
 Interpretability is provided via **SHAP (SHapley Additive exPlanations)**. This allows the model to move beyond "black box" predictions, quantifying how individual hazards (e.g., wind speed) interact with local vulnerability (e.g., SHDI) to drive the final affected population counts.
 

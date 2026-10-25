@@ -12,6 +12,7 @@ from src.models.baselines import (
     WindspeedExposedModel,
     WindspeedHistoricalModel,
 )
+from src.models.two_stage_glm import TwoStageGLM
 from src.models.two_stage_xgb import TwoStageXGBoost
 
 logger = logging.getLogger(__name__)
@@ -211,10 +212,16 @@ def execute_training_run(model_name, strategy, aggregate_to_adm1=False,
         model = WindspeedHistoricalModel()
     elif model_name == "2-stage-XGBoost":
         model = TwoStageXGBoost(features=list(features or FEATURES), use_tuned=use_tuned)
+    elif model_name == "2-stage-GLM":
+        # The statistical baseline: same predictors, rows, rebalancing, folds
+        # and aggregation, with logistic and fractional-logit stages instead
+        # of boosted trees. Tuned by src/models/glm_search.py.
+        model = TwoStageGLM(features=list(features or FEATURES), use_tuned=use_tuned)
     else:
         raise ValueError(
             f"Unknown model_name: {model_name}. Allowed: 'historical', "
-            "'windspeed-exposed', 'windspeed-historical', '2-stage-XGBoost'."
+            "'windspeed-exposed', 'windspeed-historical', '2-stage-XGBoost', "
+            "'2-stage-GLM'."
         )
 
     # A grid-level run is aggregated to ADM1 afterwards and writes that to

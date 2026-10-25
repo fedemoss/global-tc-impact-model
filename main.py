@@ -81,6 +81,13 @@ def main():
                         help="Train the 2-stage XGBoost model")
     parser.add_argument("--run-interpretability", action="store_true",
                         help="Run SHAP analysis on trained models")
+    parser.add_argument("--models", nargs="+", default=["2-stage-XGBoost"],
+                        choices=["2-stage-XGBoost", "2-stage-GLM"],
+                        help="Fitted models to run with --run-models. '2-stage-GLM' "
+                             "is the statistical baseline (logistic occurrence, "
+                             "fractional-logit severity) on the same predictors, "
+                             "folds and aggregation; tune it first with "
+                             "src/models/glm_search.py")
     parser.add_argument("--with-baselines", action="store_true",
                         help="Also run the three reference baselines, so the "
                              "evaluation can compare against them")
@@ -211,15 +218,16 @@ def main():
         # are aggregated to ADM1 afterwards, which is the level EM-DAT reports
         # at and the level the baselines are compared on.
         features, run_name = resolve_features(args)
-        for strategy in args.strategies:
-            logging.info(f"Science: Running 2-stage-XGBoost ({strategy}, "
-                         f"fitted at {args.train_at})...")
-            execute_training_run("2-stage-XGBoost", strategy=strategy,
-                                 aggregate_to_adm1=(args.train_at == "adm1"),
-                                 event_col=args.predict_unit,
-                                 exclude_col=args.withhold_unit,
-                                 recompute=args.recompute,
-                                 features=features, run_name=run_name)
+        for model_name in args.models:
+            for strategy in args.strategies:
+                logging.info(f"Science: Running {model_name} ({strategy}, "
+                             f"fitted at {args.train_at})...")
+                execute_training_run(model_name, strategy=strategy,
+                                     aggregate_to_adm1=(args.train_at == "adm1"),
+                                     event_col=args.predict_unit,
+                                     exclude_col=args.withhold_unit,
+                                     recompute=args.recompute,
+                                     features=features, run_name=run_name)
 
         if args.with_baselines:
             # The baselines are deterministic rules with no fitted parameter,

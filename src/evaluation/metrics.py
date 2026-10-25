@@ -78,8 +78,9 @@ def load_and_evaluate_all_models(level="adm1", strategy="global",
     model_names = [
         "historical", 
         "windspeed-exposed", 
-        "windspeed-historical", 
-        "2-stage-XGBoost"
+        "windspeed-historical",
+        "2-stage-XGBoost",
+        "2-stage-GLM",
     ]
     
     models_dict = {}

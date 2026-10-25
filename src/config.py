@@ -87,6 +87,13 @@ HYPERPARAMETERS_PATH = Path(
     os.getenv("TC_IMPACT_HYPERPARAMETERS", DATA_DIR / "model_hyperparameters.json")
 )
 
+# The same for the two-part GLM baseline, written by src/models/glm_search.py
+# and read by models/two_stage_glm.py. Kept apart from the XGBoost file so that
+# tuning one model never touches the other's configuration.
+GLM_HYPERPARAMETERS_PATH = Path(
+    os.getenv("TC_IMPACT_GLM_HYPERPARAMETERS", DATA_DIR / "glm_hyperparameters.json")
+)
+
 # FEATURES used in the final 2-stage XGBoost model
 FEATURES = [
     "wind_speed", "rainfall_max_24h", "population", "coast_length_meters", 
