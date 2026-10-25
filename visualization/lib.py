@@ -696,8 +696,11 @@ def plot_case_studies(cases, suffix="", extents=None, pad=1.5, savefig=None,
     handles = [Patch(facecolor=BAND_COLORS[l], edgecolor="black", label=l)
                for l in BAND_LABELS]
     handles.append(Line2D([0], [0], color=TRACK_COLOR, lw=1.8, label="Storm Track"))
-    axes[-1][0].legend(handles=handles, title="Impact (%)", loc="lower left",
-                       fontsize=8, title_fontsize=9, framealpha=0.95)
+    # Outside the axes rather than over them: the frames are drawn to the
+    # country's bounds, so any corner of the panel may carry impact.
+    axes[-1][0].legend(handles=handles, title="Impact (%)", loc="upper right",
+                       bbox_to_anchor=(-0.02, 1.0), fontsize=8,
+                       title_fontsize=9, framealpha=0.95)
 
     fig.subplots_adjust(hspace=0.28, wspace=0.02)
     if savefig:
