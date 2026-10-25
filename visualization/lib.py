@@ -286,7 +286,7 @@ def plot_models_violin(ax, dfs, model_names, colors=None, show_legend=True,
     ax.grid(axis="y", linestyle="--", alpha=0.5)
     ax.set_xlabel("")
     ax.tick_params(axis="x", labelsize=12)
-    ax.set_ylabel("Absolute Error (%)" if show_ylabel else "", size=12)
+    ax.set_ylabel("Absolute error (percentage points)" if show_ylabel else "", size=12)
     if show_legend:
         ax.legend(title="Model", loc="upper left")
 
