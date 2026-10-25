@@ -129,20 +129,26 @@ def prepare_data(aggregate_to_adm1=False):
         })
         groupby_keys = ["DisNo.", "sid", "level", "GID_0", "GID_1", "iso3", "cyclone_basin", "date"]
         df = df.groupby(groupby_keys, dropna=False, observed=True).agg(agg_dict).reset_index()
+        # A unit can be modelled only where it is one: it needs an identity to
+        # be predicted for, and a population for impact to be a share of. Cells
+        # that fall outside every ADM1 boundary carry no unit to aggregate into.
+        df = df[df["GID_1"].notna() & (df["population"] > 0)]
 
     return df.drop_duplicates()
 
 
 def execute_training_run(model_name, strategy, aggregate_to_adm1=False,
-                         event_col="sid", recompute=False,
+                         event_col="DisNo.", exclude_col="sid", recompute=False,
                          features=None, run_name=None, use_tuned=True):
     """Orchestrates the data prep and LOOCV execution for a specific model and strategy.
 
-    `event_col` is the LOOCV grouping unit: "sid" (the physical cyclone --
-    default, matching the revised manuscript, the hyperparameter search and
-    the bootstrap) or "DisNo." (the round-1 country-event record, kept as an
-    explicit option so the old grouping can be reproduced for the response
-    letter's before/after comparison).
+    `event_col` is the unit predicted per fold and `exclude_col` the unit
+    withheld from its training set. The default predicts each country-event,
+    the level impact is reported and evaluated at, while withholding the whole
+    physical cyclone, so a storm's other landfalls cannot train the fold that
+    predicts this one. Setting `exclude_col` to `event_col` restores the
+    round-1 behaviour, where only the record under test was withheld; setting
+    `event_col` to "sid" predicts one row per storm instead of per country.
 
     `use_tuned=False` ignores data/model_hyperparameters.json and runs the
     built-in (round-1) fixed configuration -- the attribution runs in
@@ -158,7 +164,7 @@ def execute_training_run(model_name, strategy, aggregate_to_adm1=False,
     logger.info(f"Model: {model_name}")
     logger.info(f"Strategy: {strategy}")
     logger.info(f"Level: {'ADM1' if aggregate_to_adm1 else 'Grid'}")
-    logger.info(f"LOOCV unit: {event_col}")
+    logger.info(f"LOOCV unit: predict {event_col}, withhold {exclude_col or event_col}")
     logger.info(f"Recompute existing predictions: {recompute}")
     chosen = list(features or FEATURES)
     if len(chosen) != len(FEATURES):
@@ -187,6 +193,15 @@ def execute_training_run(model_name, strategy, aggregate_to_adm1=False,
         f"{df['sid'].nunique()} physical cyclones / {df['DisNo.'].nunique()} country-event "
         f"records / {len(df):,} rows -> {len(events)} folds grouped by {event_col}"
     )
+    if exclude_col and exclude_col != event_col:
+        # Folds whose training set loses more than the record under test,
+        # i.e. the storms that struck more than one country.
+        per_unit = df.groupby(exclude_col, observed=True)[event_col].nunique()
+        shared = int((per_unit > 1).sum())
+        logger.info(
+            f"{shared} of {len(per_unit)} {exclude_col} span several {event_col}; "
+            f"their folds also withhold the siblings"
+        )
 
     if model_name == "historical":
         model = HistoricalModel()
@@ -210,11 +225,12 @@ def execute_training_run(model_name, strategy, aggregate_to_adm1=False,
     output_folder = f"model_output/{model_name}_{strategy}_{level_str}"
     if run_name:
         output_folder += f"_{run_name}"
-    if event_col != "sid":
-        # Keep non-default grouping in its own directory: fold filenames are
-        # built from the grouping key, so mixing them would corrupt the
-        # resume check and the compiled predictions file.
-        output_folder += f"_by_{event_col}"
+    if (event_col, exclude_col) != ("DisNo.", "sid"):
+        # Keep a non-default fold definition in its own directory: fold
+        # filenames are built from the predicted unit, so mixing two
+        # definitions would corrupt the resume check and the compiled
+        # predictions file.
+        output_folder += f"_by_{event_col}_excl_{exclude_col or event_col}"
 
     run_loocv_pipeline(
         df=df,
@@ -223,6 +239,7 @@ def execute_training_run(model_name, strategy, aggregate_to_adm1=False,
         strategy=strategy,
         output_folder=output_folder,
         event_col=event_col,
+        exclude_col=exclude_col,
         recompute=recompute,
     )
 

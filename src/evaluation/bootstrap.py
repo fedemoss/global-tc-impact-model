@@ -31,9 +31,14 @@ Intervals are percentile-method, so they are neither bias- nor skew-corrected
 import numpy as np
 import pandas as pd
 
+from sklearn.metrics import cohen_kappa_score
+
+from src.evaluation.aggregation import categorise, exceeds
+
 METRIC_NAMES = [
     "precision", "recall", "specificity", "accuracy",
     "fpr", "fnr", "f1", "csi", "mean_abs_error", "median_abs_error",
+    "rmse", "qwk",
 ]
 
 
@@ -50,8 +55,8 @@ def compute_metrics_at_threshold(
     replicate can be dropped rather than counted as zero; with False it returns
     0.0, reproducing `sklearn`'s `zero_division=0` for the point estimate.
     """
-    reported_bin = (df[target_col] > threshold).astype(int)
-    predicted_bin = (df[pred_col] > threshold).astype(int)
+    reported_bin = exceeds(df[target_col], threshold).astype(int)
+    predicted_bin = exceeds(df[pred_col], threshold).astype(int)
 
     TP = int(((predicted_bin == 1) & (reported_bin == 1)).sum())
     TN = int(((predicted_bin == 0) & (reported_bin == 0)).sum())
@@ -80,10 +85,24 @@ def compute_metrics_at_threshold(
 
     abs_error = df["abs_error"] if "abs_error" in df.columns else (df[target_col] - df[pred_col]).abs()
 
+    # Magnitude and ordinal agreement do not depend on the threshold, and are
+    # repeated across its rows so that every metric of a model is read from
+    # one place. The kappa is taken over the impact categories rather than the
+    # continuous values, so a prediction is penalised by how many bands it is
+    # out rather than by its magnitude.
+    error = df[target_col] - df[pred_col]
+    try:
+        qwk = cohen_kappa_score(categorise(df[target_col]),
+                                categorise(df[pred_col]), weights="quadratic")
+    except ValueError:
+        # A replicate holding a single category has no agreement to measure.
+        qwk = np.nan if nan_on_undefined else 0.0
+
     return {
         "precision": precision, "recall": recall, "specificity": specificity,
         "accuracy": accuracy, "fpr": fpr, "fnr": fnr, "f1": f1, "csi": csi,
         "mean_abs_error": abs_error.mean(), "median_abs_error": abs_error.median(),
+        "rmse": float(np.sqrt((error ** 2).mean())), "qwk": qwk,
     }
 
 

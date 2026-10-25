@@ -23,13 +23,14 @@ If you use this repository or the generated dataset in your research, please cit
 │   ├── collectors/           # Data acquisition (general_collector.py, pps_collector.py)
 │   ├── static_features/      # Spatial Processing (grid_cells.py, process_gadm.py, etc.)
 │   ├── dynamic_features/     # Event-Based Processing (process_emdat.py, process_wind.py, etc.)
-│   ├── models/               # Two-Stage XGBoost & Baselines (train.py)
-│   ├── evaluation/           # LOOCV (cv_strategies.py), metrics & bootstrap CIs (bootstrap.py)
+│   ├── models/               # Two-Stage XGBoost & Baselines (train.py), tuning (hyperparameter_search.py)
+│   ├── evaluation/           # LOOCV (cv_strategies.py), metrics & bootstrap CIs (bootstrap.py),
+│   │                         #   scored results (paper_metrics.py, basin_metrics.py)
 │   ├── interpretability/     # SHAP Analysis & Visualization
 │   ├── utils/                # Shared helpers (geo_utils, logging_setup, time interpolation)
 │   ├── config.py             # Global constants, URLs, and ISO3 List
 │   └── dataset_builder.py    # Master script to compile the final Parquet
-├── test/                     # Hyperparameter search (hyperparameter_search.py)
+├── visualization/            # Notebooks producing the figures, with lib.py behind them
 ├── main.py                   # Unified CLI Entry Point
 ├── requirements.txt          # Python dependencies
 └── README.md
@@ -164,17 +165,22 @@ python main.py --stage build
 
 ### 3. Hyperparameter Search (optional, but do it before reporting results)
 ```bash
-# Joint random search over both stages; writes data/model_hyperparameters.json
-python test/hyperparameter_search.py --n-iter 80 --n-events 200
+# Stage 1 -- random search over the tree parameters and the ratios;
+# writes data/model_hyperparameters.json
+python src/models/hyperparameter_search.py --n-iter 80 --n-events 200
 
-# Exhaustive search over a deliberately small grid instead
-python test/hyperparameter_search.py --search grid
+# Stage 2 -- trees frozen at stage 1's winner, every (u1, u2) scored
+# exhaustively and the threshold swept for free
+python src/models/hyperparameter_search.py --search ratios \
+    --from-json data/model_hyperparameters_stage1.json --select-on f1_high
 
 # Tiny budget, just to check the plumbing runs
-python test/hyperparameter_search.py --dry-run
+python src/models/hyperparameter_search.py --dry-run
 ```
 
-`test/hyperparameter_search.py` tunes **both stages at once** — the stage-1 classifier, the stage-2 regressor, the two class-balancing ratios (`u1`, `u2`) and the stage-1 decision threshold (`clf_threshold`). Tuning the stages separately would miss their interaction: how aggressively stage 1 flags cells decides which rows stage 2 ever sees.
+`src/models/hyperparameter_search.py` tunes **both stages together** — the stage-1 classifier, the stage-2 regressor, the two class-balancing ratios (`u1`, `u2`) and the stage-1 decision threshold (`clf_threshold`). Tuning the stages separately would miss their interaction: how aggressively stage 1 flags cells decides which rows stage 2 ever sees.
+
+The two passes split that search rather than separating the stages. The random pass covers the tree parameters, which are many and whose surface is flat, by sampling. The ratios pass then grids `u1 × u2` exhaustively, since those two and the threshold set the precision/recall operating point the high-impact class depends on, and a sampled grid leaves that under-explored. The second pass is cheap because the search factorizes: `u1` enters only stage 1 and `u2` only stage 2, so each fold needs `|u1| + |u2|` fits rather than `|u1| × |u2|`, and every pair is assembled from the stored predictions. The threshold is applied to those same predictions, so sweeping it costs nothing and the whole curve is reported.
 
 Three properties are worth knowing, because they decide whether the reported numbers mean anything:
 
@@ -201,15 +207,36 @@ Undefined metrics are treated differently in the point estimate and in the repli
 
 ### 5. Model Training & Interpretability
 ```bash
-# Run 2-Stage XGBoost with Leave-One-Cyclone-Out Cross-Validation (LOOCV)
+# Run 2-Stage XGBoost with leave-one-out cross-validation.
 # Uses data/model_hyperparameters.json when present, defaults otherwise.
 python main.py --run-models
+
+# Also score the three reference baselines, for comparison
+python main.py --run-models --with-baselines
+
+# Other strategies, each to its own folder
+python main.py --run-models --strategies global walk_forward geo_constrained
+
+# Fit the administrative units directly instead of aggregating grid predictions
+python main.py --run-models --train-at adm1
+
+# Leave a feature out, for an ablation
+python main.py --run-models --exclude-features N_events_5_years
 
 # Generate SHAP Summary and Dependence Plots for the trained model
 python main.py --run-interpretability
 ```
 
-The LOOCV unit is the **physical cyclone (IBTrACS `sid`)**: a storm that hits several countries leaves the training set as a whole. The round-1 grouping by EM-DAT country-event record remains available for comparison — call `execute_training_run(..., event_col="DisNo.")`; its outputs land in a separate `..._by_DisNo.` directory so the two never mix.
+**The unit predicted and the unit withheld are separate.** Each fold predicts one
+EM-DAT country-event record, which is the level impact is reported and evaluated
+at, while its training set drops every record of the cyclone under test. A storm
+making landfall in several countries is one record per country, all describing
+the same hazard field, so withholding only the record under test would leave its
+siblings in training. `--predict-unit` and `--withhold-unit` change either; a pair
+other than the default writes to its own folder, so two definitions never mix.
+
+A run can be named with `--run-name`, which keeps it apart from an earlier one,
+and `--recompute` replaces existing per-fold predictions rather than resuming.
 
 ---
 
@@ -226,6 +253,23 @@ The pipeline engineers the following features for every 0.1° grid cell:
 | **Geography** | Distance to Coast, Coastline Length, Landslide Risk | GADM, World Bank |
 | **History** | N Events in Last 5 Years | IBTrACS / EM-DAT |
 
+### 6. Figures and Tables
+
+```bash
+# Score every model, with cyclone-clustered intervals -> data/output/metrics<suffix>/
+TC_RUN_SUFFIX=_v2 python src/evaluation/paper_metrics.py
+TC_RUN_SUFFIX=_v2 python src/evaluation/basin_metrics.py
+
+# Then the notebooks, which only read what those wrote
+TC_RUN_SUFFIX=_v2 jupyter lab visualization/
+```
+
+The notebooks in `visualization/` produce the figures; `visualization/README.md`
+says which notebook makes what. A run is selected with `TC_RUN_SUFFIX`, and its
+figures are written to `visualization/figs<suffix>/`, which git ignores: the
+notebooks rewrite every figure from the model output, so versioning them records
+churn rather than history.
+
 ---
 
 ## Methodology Summary
@@ -237,6 +281,15 @@ To accurately model sub-national variation, `process_emdat.py` parses reported a
 Because spatial impact data is heavily zero-inflated (many cells have no impact), we utilize a two-stage approach:
 1.  **Stage 1 (Classification)**: Predicts the binary probability of any population being affected within a 0.1° grid cell.
 2.  **Stage 2 (Regression)**: Predicts the magnitude of the affected population for cells classified as impacted in Stage 1.
+
+Results are reported over three impact categories: no impact at exactly zero,
+low impact below 15% of a unit's population, and high impact at **15% or more**.
+The boundary belongs to the band above it; the zero cut is strict, since a unit
+reported at zero is not affected. Both rules come from one definition in
+`src/evaluation/aggregation.py`, which every metric and figure uses. Alongside
+the binary metrics, each model is scored on mean and root-mean-square error and
+on quadratic weighted kappa over those categories, all with 95% intervals from
+resampling whole cyclones.
 
 ### 3. Model Interpretability
 Interpretability is provided via **SHAP (SHapley Additive exPlanations)**. This allows the model to move beyond "black box" predictions, quantifying how individual hazards (e.g., wind speed) interact with local vulnerability (e.g., SHDI) to drive the final affected population counts.

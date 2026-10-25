@@ -8,6 +8,11 @@ __pycache__/
 /data/*
 !/data/model_hyperparameters.json
 
+# Figures, which the notebooks regenerate from the model output. They are kept
+# locally and not carried here.
+/visualization/figs/
+/visualization/figs_v2/
+
 # Distribution / packaging
 .Python
 build/
@@ -170,3 +175,9 @@ download_srtm_tiles_old.py
 
 # Local test suite for the pipeline internals -- kept on disk, not part of the release
 /tests/
+
+# Internal working notes, kept locally.
+/RERUN_CHECKLIST.md
+
+# The manuscript's tables are built here but belong to the paper, not the code.
+/visualization/paper_tables.ipynb

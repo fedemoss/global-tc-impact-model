@@ -1,4 +1,5 @@
 import gc
+import json
 import logging
 
 import joblib
@@ -7,6 +8,34 @@ import pandas as pd
 from src.config import OUTPUT_DIR
 
 logger = logging.getLogger(__name__)
+
+
+def _claim_output_folder(out_dir, strategy, event_col, exclude_col):
+    """Record how this folder's folds are defined, and refuse to mix two.
+
+    Fold filenames carry the predicted unit alone, so predictions left by a run
+    that withheld a different unit are neither overwritten nor caught by the
+    resume check -- recompute included, since that only rewrites the filenames
+    the current definition produces. They are simply picked up by the final
+    concatenation. Recording the definition turns that into an error, which the
+    caller resolves by emptying the folder or naming another; the stale
+    predictions are a run's worth of compute, so they are never removed here.
+    """
+    marker = out_dir / "fold_config.json"
+    current = {"strategy": strategy, "event_col": event_col,
+               "exclude_col": exclude_col or event_col}
+    if not any(out_dir.glob("predictions_event_*.csv")):
+        marker.write_text(json.dumps(current, indent=2))
+        return
+
+    previous = json.loads(marker.read_text()) if marker.exists() else None
+    if previous != current:
+        raise ValueError(
+            f"{out_dir} holds predictions made with "
+            f"{previous or 'an unrecorded fold definition'}, which cannot be "
+            f"combined with {current}. Empty or rename the folder, or send this "
+            f"run to another one."
+        )
 
 
 def _save_final_model(model, out_dir):
@@ -20,19 +49,25 @@ def _save_final_model(model, out_dir):
 
 
 def run_loocv_pipeline(df, events, model, strategy="global", output_folder="loocv_results",
-                       event_col="sid", recompute=False):
+                       event_col="sid", exclude_col="sid", recompute=False):
     """
     Executes LOOCV strategies based exactly on the original paper parameters.
 
-    `event_col` selects the unit left out per fold, and `events` must always be
+    `event_col` selects the unit predicted per fold, and `events` must always be
     `df[event_col].unique()`:
 
-    - "DisNo." (default) -- the EM-DAT country-event record, as in the paper.
-    - "sid"              -- the physical cyclone (IBTrACS storm id). A storm
-      that hits several countries contributes several `DisNo.` records, so
-      grouping by `sid` keeps all of them on one side of every fold. This is
-      stricter, and only differs from the default once the dataset contains
-      multi-country storms.
+    - "sid"     -- the physical cyclone (IBTrACS storm id); one prediction per
+      storm.
+    - "DisNo."  -- the EM-DAT country-event record; one prediction per country
+      struck, which is the unit impact is reported at.
+
+    `exclude_col` names the unit withheld from training, which need not be the
+    unit predicted. A storm making landfall in several countries produces one
+    EM-DAT record per country, all sharing a `sid` and describing the same
+    hazard field, so leaving out a single country-event would leave its
+    siblings in training. Holding out `sid` while predicting `DisNo.` keeps the
+    per-country granularity without training on the storm under test. Setting
+    it to `event_col`, or to None, withholds only the unit predicted.
 
     Note that the per-fold output filenames are built from `events`, so the two
     settings write different filenames -- use a separate `output_folder` when
@@ -48,6 +83,18 @@ def run_loocv_pipeline(df, events, model, strategy="global", output_folder="looc
     """
     out_dir = OUTPUT_DIR / output_folder
     out_dir.mkdir(parents=True, exist_ok=True)
+    _claim_output_folder(out_dir, strategy, event_col, exclude_col)
+
+    widen = bool(exclude_col) and exclude_col != event_col
+    if widen:
+        if exclude_col not in df.columns:
+            raise ValueError(f"exclude_col {exclude_col!r} is not a column of the dataset")
+        # A null here would silently exempt those rows from the exclusion,
+        # leaving the test storm's own records in training.
+        if df[exclude_col].isna().any():
+            raise ValueError(
+                f"rows with a null {exclude_col} cannot be withheld from training"
+            )
 
     for ev in events:
         out_file = out_dir / f"predictions_event_{ev}.csv"
@@ -60,19 +107,30 @@ def run_loocv_pipeline(df, events, model, strategy="global", output_folder="looc
             logger.info(f"Skipping event {ev}: file already exists.")
             continue
 
+        is_test = df[event_col] == ev
+        # Every row the fold is forbidden to train on: the unit under test, and
+        # -- when the two differ -- the whole of whatever `exclude_col` unit it
+        # belongs to. This is applied before each strategy's own restriction, so
+        # none of them can readmit a withheld row: the test storm's sibling
+        # records precede it by hours, which clears walk-forward's date cutoff,
+        # and share its basin by construction.
+        trainable = ~is_test
+        if widen:
+            trainable &= ~df[exclude_col].isin(df.loc[is_test, exclude_col].unique())
+
         # -------------------------------------------------------------
         # Exact Exclusion Logic per Strategy
         # -------------------------------------------------------------
         if strategy == "walk_forward":
             # Earliest record date of the storm -- multi-country storms have several
-            event_date = df.loc[df[event_col] == ev, "date"].min()
-            df_train = df[(df[event_col] != ev) & (df["date"] < event_date)].copy()
+            event_date = df.loc[is_test, "date"].min()
+            df_train = df[trainable & (df["date"] < event_date)].copy()
             if df_train.empty:
                 logger.info(f"Skipping {ev} — no past data to train on for walk-forward.")
                 continue
-                
+
         elif strategy == "geo_constrained":
-            event_basin = df.loc[df[event_col] == ev, "cyclone_basin"].iloc[0]
+            event_basin = df.loc[is_test, "cyclone_basin"].iloc[0]
             if pd.isna(event_basin):
                 raise ValueError(
                     f"{ev} has no cyclone_basin. Every storm in IBTrACS has "
@@ -81,29 +139,33 @@ def run_loocv_pipeline(df, events, model, strategy="global", output_folder="looc
                     f"would quietly shrink the evaluation instead."
                 )
             # Train only on cyclones in the exact same basin
-            df_train = df[(df[event_col] != ev) & (df["cyclone_basin"] == event_basin)].copy()
+            df_train = df[trainable & (df["cyclone_basin"] == event_basin)].copy()
             if df_train.empty:
                 logger.info(f"Skipping {ev} — no other events in basin {event_basin} to train on.")
                 continue
-                
+
         elif strategy == "global":
             # Train on all cyclones except the target
-            df_train = df[df[event_col] != ev].copy()
+            df_train = df[trainable].copy()
 
         else:
             raise ValueError(f"Unknown strategy: {strategy}")
 
         # Test set is always the isolated cyclone
-        df_test = df[df[event_col] == ev].copy()
+        df_test = df[is_test].copy()
         if df_test.empty:
             raise ValueError(
                 f"no rows with {event_col} == {ev!r} -- `events` must be "
                 f"df[{event_col!r}].unique(), not another identifier"
             )
 
-        # A physical cyclone must never sit on both sides of a fold.
-        overlap = set(df_train[event_col].unique()) & set(df_test[event_col].unique())
-        assert not overlap, f"fold leakage: {sorted(overlap)} in both train and test"
+        # A physical cyclone must never sit on both sides of a fold. Checked on
+        # the withheld unit rather than the predicted one: with the two apart,
+        # agreement on `event_col` alone would pass a fold whose training set
+        # still held the test storm under a sibling country's record.
+        checked = exclude_col or event_col
+        overlap = set(df_train[checked].unique()) & set(df_test[checked].unique())
+        assert not overlap, f"fold leakage: {checked} {sorted(overlap)} in both train and test"
 
         # -------------------------------------------------------------
         # Execute Model Pipeline

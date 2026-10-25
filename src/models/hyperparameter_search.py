@@ -55,14 +55,15 @@ written out so a winner inside the noise band is visible as such.
 
 Usage
 -----
-    python test/hyperparameter_search.py --n-iter 80 --n-events 200
-    python test/hyperparameter_search.py --search ratios
-    python test/hyperparameter_search.py --dry-run     # tiny, for a smoke test
+    python src/models/hyperparameter_search.py --n-iter 80 --n-events 200
+    python src/models/hyperparameter_search.py --search ratios
+    python src/models/hyperparameter_search.py --dry-run   # tiny, for a smoke test
 
 Nothing is written until the search completes; pass `--output` to write
 somewhere other than the configured path.
 """
 import argparse
+import gc
 import json
 import logging
 import sys
@@ -81,7 +82,7 @@ except ImportError:  # scikit-learn < 0.24
     from sklearn.model_selection import GroupKFold
     HAS_STRATIFIED_GROUP_KFOLD = False
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.config import FEATURES, HYPERPARAMETERS_PATH, INPUT_DIR
 from src.models.two_stage_xgb import TwoStageXGBoost
@@ -100,14 +101,27 @@ IMPACT_THRESHOLD_HIGH = 15
 
 # Stage-1 cutoffs scored for every candidate. Not a search dimension: every
 # value is evaluated from each candidate's stored probabilities.
-CLF_THRESHOLDS = (0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80)
+CLF_THRESHOLDS = (0.40, 0.50, 0.60, 0.70, 0.80, 0.90)
 
 # Balancing ratios. The last search selected u2 = 10 and threshold 0.70, both
 # at the edge of the previous grids; these extend past them so a boundary
 # optimum is either confirmed interior or exposed as censored. A large u
 # saturates once it asks for more majority rows than exist - the saturation
 # share is reported, and a saturated winner simply means "no undersampling".
-U_VALUES = (1, 2, 3, 5, 8, 10, 15, 20)
+# The previous search selected u2 = 10 and a cutoff of 0.70, both at the edge
+# of the grid then in use. A boundary optimum may be censored, so the ladder
+# runs past them: dense below 10, where one step changes the training set
+# substantially, and wider above. Each result records whether the ratio
+# saturated, since beyond that point a larger ratio is the same training set.
+# The two stages rebalance different populations, so they saturate at
+# different points: stage 1 holds ~14 unaffected cells per affected one and
+# runs out of majority rows to drop at 15, while stage 2 holds ~27 low-impact
+# cells per high-impact one and still has rows to drop at 25. Past saturation
+# a larger ratio is the same training set, so each ladder stops where its
+# stage does, with the saturating value kept as the "keep everything" end.
+U1_VALUES = (1, 2, 5, 8, 10, 12, 15)
+U2_VALUES = (1, 2, 5, 8, 10, 12, 15, 17, 20, 22, 25, 28)
+U_VALUES = U1_VALUES  # the random phase samples one ladder for both ratios
 
 PARAM_SPACE = {
     "clf_learning_rate": [0.01, 0.03, 0.05, 0.1],
@@ -124,8 +138,8 @@ PARAM_SPACE = {
     "reg_subsample": [0.6, 0.8, 1.0],
     "reg_colsample_bytree": [0.6, 0.8, 1.0],
     "reg_n_estimators": [100, 200, 400],
-    "u1": list(U_VALUES),
-    "u2": list(U_VALUES),
+    "u1": list(U1_VALUES),
+    "u2": list(U2_VALUES),
 }
 
 
@@ -211,7 +225,7 @@ def event_severity_labels(df, target_name=TARGET_NAME):
     def categorize(x):
         if x == 0:
             return 0
-        return 1 if x <= IMPACT_THRESHOLD_HIGH else 2
+        return 2 if x >= IMPACT_THRESHOLD_HIGH else 1
     return df.groupby("sid", observed=True)[target_name].max().apply(categorize)
 
 
@@ -268,7 +282,7 @@ def fit_stage2(df_train, features, reg_params, u2):
     """Regressor fitted on observed positives, u2-rebalanced - threshold-free."""
     df_high = df_train[df_train[TARGET_NAME] > 0].copy()
     # Strictly > 15, matching the paper's category definition.
-    df_high["impact_high"] = (df_high[TARGET_NAME] > IMPACT_THRESHOLD_HIGH).astype(int)
+    df_high["impact_high"] = (df_high[TARGET_NAME] >= IMPACT_THRESHOLD_HIGH).astype(int)
     n_minority = int(df_high["impact_high"].sum())
     n_majority = int((df_high["impact_high"] == 0).sum())
     balanced = TwoStageXGBoost.oversample(df_high, target="impact_high", u=u2)
@@ -332,8 +346,11 @@ def score_thresholds(cells, thresholds=CLF_THRESHOLDS):
         row = {"clf_threshold": float(threshold), "n_adm1": int(len(grouped)),
                "mae": float(np.abs(reported - predicted[:, k]).mean())}
         for suffix, cut in (("", IMPACT_THRESHOLD_LOW), ("_high", IMPACT_THRESHOLD_HIGH)):
-            y_true = reported > cut
-            y_pred = predicted[:, k] > cut
+            # Zero separates affected from unaffected and is strict; the
+            # magnitude cut includes its boundary, so high impact is 15% or more.
+            y_true = reported > cut if cut == IMPACT_THRESHOLD_LOW else reported >= cut
+            y_pred = (predicted[:, k] > cut if cut == IMPACT_THRESHOLD_LOW
+                      else predicted[:, k] >= cut)
             tp = int(np.sum(y_true & y_pred))
             fp = int(np.sum(~y_true & y_pred))
             fn = int(np.sum(y_true & ~y_pred))
@@ -385,7 +402,7 @@ def score_candidate(cand, df_search, folds, features, select_on, nthread=1):
 # every (u1, u2) combination is assembled from stored predictions.
 # --------------------------------------------------------------------------
 def ratios_grid(df_search, folds, features, clf_params, reg_params, select_on,
-                u_values=U_VALUES, n_jobs=1, nthread=1):
+                u1_values=U1_VALUES, u2_values=U2_VALUES, n_jobs=1, nthread=1):
     clf_params = {**clf_params, "nthread": nthread}
     reg_params = {**reg_params, "nthread": nthread}
 
@@ -401,16 +418,19 @@ def ratios_grid(df_search, folds, features, clf_params, reg_params, select_on,
             pred = model.predict(df_test[features])
         return (fold_idx, stage, u), (pred, saturated)
 
-    jobs = [(i, stage, u) for i in range(len(folds)) for stage in ("clf", "reg") for u in u_values]
-    logging.info(f"ratios grid: {len(jobs)} stage fits "
-                 f"({len(folds)} folds x 2 stages x {len(u_values)} ratios) cover "
-                 f"{len(u_values) ** 2} (u1, u2) combinations x {len(CLF_THRESHOLDS)} thresholds")
+    jobs = ([(i, "clf", u) for i in range(len(folds)) for u in u1_values]
+            + [(i, "reg", u) for i in range(len(folds)) for u in u2_values])
+    logging.info(
+        f"ratios grid: {len(jobs)} stage fits "
+        f"({len(folds)} folds x ({len(u1_values)} u1 + {len(u2_values)} u2)) cover "
+        f"{len(u1_values) * len(u2_values)} (u1, u2) combinations x "
+        f"{len(CLF_THRESHOLDS)} thresholds")
     fitted = dict(Parallel(n_jobs=n_jobs)(delayed(one_fit)(*job) for job in jobs))
 
     test_frames = [df_search[df_search["sid"].isin(folds[i][1])] for i in range(len(folds))]
     results, curves = [], {}
-    for u1 in u_values:
-        for u2 in u_values:
+    for u1 in u1_values:
+        for u2 in u2_values:
             cells = pd.concat([
                 oof_frame(test_frames[i],
                           fitted[(i, "clf", u1)][0], fitted[(i, "reg", u2)][0])
@@ -456,6 +476,17 @@ def main(args):
     df = load_dataset(args.input)
     severity = event_severity_labels(df)
 
+    # The filters above need columns the fitting does not, and at global
+    # coverage the unused ones are a large share of the frame. Keeping only
+    # what the stages, the folds and the aggregation read leaves room for the
+    # training copies each fit makes.
+    needed = list(dict.fromkeys(
+        list(FEATURES) + ADM1_KEYS + ["sid", "id", "population", TARGET_NAME]))
+    missing = [c for c in needed if c not in df.columns]
+    if missing:
+        raise KeyError(f"the dataset is missing {missing}")
+    df = df[needed]
+
     if df["sid"].nunique() < MIN_EVENTS:
         logging.error(
             f"only {df['sid'].nunique()} cyclones available; at least {MIN_EVENTS} are needed "
@@ -469,6 +500,10 @@ def main(args):
 
     df_search = df[df["sid"].isin(search_events)].copy()
     df_holdout = df[df["sid"].isin(holdout_events)].copy()
+    # The two splits cover everything that follows; the parent frame is as
+    # large as both together and nothing reads it again.
+    del df
+    gc.collect()
 
     n_folds = min(args.n_folds, max(2, len(search_events)))
     folds = make_folds(df_search, severity, n_folds, args.random_state)
