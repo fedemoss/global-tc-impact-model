@@ -1,31 +1,50 @@
 import logging
 import os
 
-import numpy as np
 import pandas as pd
 
 from src.config import INPUT_DIR, OUTPUT_DIR
 
 logger = logging.getLogger(__name__)
 
-def create_past_events_feature(df, grid_data_path):
+#: Column whose positive values mark the area an event reported impact over.
+IMPACT_COLUMN = 'Total Affected'
+
+
+def create_past_events_feature(df, grid_data_path, impact_column=IMPACT_COLUMN):
     """
-    Calculates the N_events_5_years feature: for each event, the number of
-    previous events that hit the same country in the preceding 5 years.
-    The country-level count is assigned to every grid cell of that country.
+    Calculates the N_events_5_years feature: for each grid cell, the number of
+    previously reported cyclones whose reported impacting area intersected that
+    cell in the five years preceding the event.
+
+    The count is per cell, not per country. A past event counts for a cell only
+    where it reported impact there: the sub-national expansion gives every cell
+    of an affected country a row, zero-filled outside the reported units, so
+    appearing in an event's records is not the same as having been hit by it.
+    Counting rows rather than reported impact would return the national total to
+    every cell of the country and leave the feature spatially flat.
 
     Args:
         df (pd.DataFrame): Grid-level impact data merged with storm metadata
-                           (must contain: iso3, DisNo., landfalldate).
+                           (must contain: id, iso3, DisNo., landfalldate and
+                           `impact_column`).
         grid_data_path (Path): Path to the global grid centroids CSV.
+        impact_column (str): Column read to decide where an event was reported.
 
     Returns:
         pd.DataFrame: One row per (grid cell, event) for the impacted country,
                       with columns id, iso3, DisNo., N_events_5_years.
     """
+    if impact_column not in df.columns:
+        raise KeyError(
+            f"{impact_column!r} is needed to tell where an event was reported; "
+            f"got {sorted(df.columns)}"
+        )
+
     grid_data = pd.read_csv(grid_data_path)
     grid_cells = grid_data[['id', 'iso3']].drop_duplicates()
 
+    df = df.copy()
     df['landfalldate'] = pd.to_datetime(df['landfalldate'])
 
     # One row per (event, country)
@@ -35,26 +54,40 @@ def create_past_events_feature(df, grid_data_path):
         .dropna(subset=['landfalldate'])
     )
 
-    # Count prior events per country within the 5-year window
-    counted = []
-    for _, group in unique_events.groupby('iso3'):
-        group = group.sort_values('landfalldate')
-        dates = group['landfalldate'].values
-        window_starts = (group['landfalldate'] - pd.DateOffset(years=5)).values
-        n_before = np.searchsorted(dates, dates, side='left')
-        n_before_window = np.searchsorted(dates, window_starts, side='left')
-        group = group.assign(N_events_5_years=n_before - n_before_window)
-        counted.append(group)
-    event_counts = pd.concat(counted, ignore_index=True)
-
-    # Broadcast each country-level count to that country's grid cells only
-    final_historical_df = grid_cells.merge(
-        event_counts[['DisNo.', 'iso3', 'N_events_5_years']],
-        on='iso3',
-        how='inner',
+    # The cells each event actually reported impact over.
+    reported = (
+        df.loc[pd.to_numeric(df[impact_column], errors='coerce') > 0,
+               ['DisNo.', 'iso3', 'id']]
+        .drop_duplicates()
+        .merge(unique_events[['DisNo.', 'landfalldate']], on='DisNo.', how='inner')
     )
 
-    return final_historical_df
+    results = []
+    for iso3, events in unique_events.groupby('iso3'):
+        cells = grid_cells.loc[grid_cells['iso3'] == iso3, ['id', 'iso3']]
+        if cells.empty:
+            continue
+        country_hits = reported[reported['iso3'] == iso3]
+
+        for _, event in events.iterrows():
+            window_start = event['landfalldate'] - pd.DateOffset(years=5)
+            past = country_hits[
+                (country_hits['landfalldate'] >= window_start)
+                & (country_hits['landfalldate'] < event['landfalldate'])
+                & (country_hits['DisNo.'] != event['DisNo.'])
+            ]
+            counts = past.groupby('id')['DisNo.'].nunique()
+
+            out = cells.copy()
+            out['DisNo.'] = event['DisNo.']
+            out['N_events_5_years'] = (
+                out['id'].map(counts).fillna(0).astype('int32'))
+            results.append(out)
+
+    if not results:
+        return pd.DataFrame(
+            columns=['id', 'iso3', 'DisNo.', 'N_events_5_years'])
+    return pd.concat(results, ignore_index=True)
 
 def _build_impact_with_dates(iso3_filter=None):
     """Merge grid-level impact data with storm metadata to attach date columns."""
