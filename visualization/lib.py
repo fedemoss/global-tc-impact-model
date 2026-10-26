@@ -879,11 +879,18 @@ def plot_threshold_sweep(sweep, savefig=None, share_col="share_above"):
     ax.legend(fontsize=11, frameon=True)
     ax.grid(True, alpha=0.2, linewidth=0.5)
 
+    # This panel splits a whole into two parts rather than naming three
+    # quantities, so it separates on lightness and leaves hue to the panel
+    # above: a neutral pair is confusable with none of those curves, survives
+    # every colour-vision deficiency, and still reads in greyscale print. The
+    # pale step is too light to define its own edge, so both carry the dark
+    # outline, which also parts the segments where they meet.
     above = sweep[share_col]
-    ax2.bar(sweep["threshold"], above, width=1.6, color="#d62728", alpha=0.85,
-            label="Above threshold")
+    ax2.bar(sweep["threshold"], above, width=1.6, color="#3d4650",
+            edgecolor="#3d4650", linewidth=0.7, label="Above threshold")
     ax2.bar(sweep["threshold"], 100 - above, bottom=above, width=1.6,
-            color="#f5c6c6", alpha=0.85, label="Below threshold")
+            color="#c5cbd2", edgecolor="#3d4650", linewidth=0.7,
+            label="Below threshold")
     ax2.set_xlabel("High-impact threshold (% of ADM1 population)", fontsize=13)
     ax2.set_ylabel("% of ADM1–event observations", fontsize=13)
     ax2.set_ylim(0, 100)
