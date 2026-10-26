@@ -867,11 +867,14 @@ def plot_threshold_sweep(sweep, savefig=None, share_col="share_above"):
 
     fig, (ax, ax2) = plt.subplots(2, 1, figsize=(6, 7), sharex=True)
 
-    for metric, color, label in (("precision", "#882572", "Precision"),
-                                 ("recall", "#d62728", "Recall"),
-                                 ("f1", "#e08f3f", "F1")):
-        ax.plot(sweep["threshold"], sweep[metric], color=color, marker="o",
-                linewidth=1.2, markersize=5, label=label)
+    # Okabe-Ito colours, each with its own marker and line style, so the
+    # three curves stay apart under colour-vision deficiency where they cross.
+    for metric, color, marker, style, label in (
+            ("precision", "#0072B2", "o", "-", "Precision"),
+            ("recall", "#D55E00", "s", "--", "Recall"),
+            ("f1", "#009E73", "^", ":", "F1")):
+        ax.plot(sweep["threshold"], sweep[metric], color=color, marker=marker,
+                linestyle=style, linewidth=1.4, markersize=5, label=label)
     ax.set_ylabel("Score", fontsize=13)
     ax.legend(fontsize=11, frameon=True)
     ax.grid(True, alpha=0.2, linewidth=0.5)
@@ -881,7 +884,7 @@ def plot_threshold_sweep(sweep, savefig=None, share_col="share_above"):
             label="Above threshold")
     ax2.bar(sweep["threshold"], 100 - above, bottom=above, width=1.6,
             color="#f5c6c6", alpha=0.85, label="Below threshold")
-    ax2.set_xlabel("High-Impact Threshold", fontsize=13)
+    ax2.set_xlabel("High-impact threshold (% of ADM1 population)", fontsize=13)
     ax2.set_ylabel("% of ADM1–event observations", fontsize=13)
     ax2.set_ylim(0, 100)
     ax2.legend(fontsize=11, frameon=True)
