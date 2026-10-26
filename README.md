@@ -20,14 +20,19 @@ If you use this repository or the generated dataset in your research, please cit
 │   ├── input/                # Raw downloads (GADM, SRTM, WorldPop, EM-DAT, etc.)
 │   └── output/               # Processed feature CSVs and Model results
 ├── src/
-│   ├── collectors/           # Data acquisition (general_collector.py, pps_collector.py)
+│   ├── collectors/           # Data acquisition (general_collector.py, pps_collector.py,
+│   │                         #   archived forecasts from TIGGE: forecast_collector.py)
 │   ├── static_features/      # Spatial Processing (grid_cells.py, process_gadm.py, etc.)
-│   ├── dynamic_features/     # Event-Based Processing (process_emdat.py, process_wind.py, etc.)
+│   ├── dynamic_features/     # Event-Based Processing (process_emdat.py, process_wind.py, etc.),
+│   │                         #   forecast tracks & their wind fields (process_forecast_tracks.py)
 │   ├── models/               # Two-Stage XGBoost, two-part GLM & Baselines (train.py),
-│   │                         #   tuning (hyperparameter_search.py, glm_search.py)
+│   │                         #   tuning (hyperparameter_search.py, glm_search.py),
+│   │                         #   impact from an archived forecast (forecast_model.py)
 │   ├── evaluation/           # LOOCV (cv_strategies.py), metrics & bootstrap CIs (bootstrap.py),
 │   │                         #   scored results (paper_metrics.py, basin_metrics.py),
-│   │                         #   paired model differences (model_comparison.py)
+│   │                         #   paired model differences (model_comparison.py),
+│   │                         #   forecast study & its lead-time scores
+│   │                         #   (forecast_study.py, forecast_metrics.py)
 │   ├── interpretability/     # SHAP Analysis & Visualization
 │   ├── utils/                # Shared helpers (geo_utils, logging_setup, time interpolation)
 │   ├── config.py             # Global constants, URLs, and ISO3 List
@@ -130,6 +135,10 @@ pip install --retries 15 --timeout 90 -r requirements.txt
     > **The two products are not interchangeable without their conversion.** The daily granule stores a *rate*, so using it as if it were an accumulation under-counts rainfall by a factor of 24. Each product therefore has its own conversion function in `process_rain_features.py` (`half_hour_raw_to_mm`, `daily_raw_to_mm`) and they are never mixed. Both report short days rather than silently summing a partial one, since the feature is a maximum over days and an incomplete day can only bias it downward.
 
 * **SHDI Index (Vulnerability)**: Download this dataset manually from *https://globaldatalab.org/shdi/download/shdi/* and put it in under `/data/SHDI/GDL-Subnational-HDI-data.csv` (requires logging to GlobalDataLab)
+
+* **TIGGE cyclone tracks (optional — only for the historical forecast study)**: archived ensemble track forecasts are read from NCAR's **GDEX** (which replaced the RDA; older RDA links no longer resolve). No registration is needed and `forecast_collector.py` downloads them itself, so this is not a prerequisite for the main pipeline. The centre is chosen with `--forecast-provider`, named by its WMO originating-centre code: `rksl` (Korea Meteorological Administration, the default), `ecmf`, `kwbc`, `egrr`, `rjtd`, `lfpw`, `ammc`, `babj`. Files land under `data/input/FORECAST/<provider>/<DisNo.>/`.
+
+    > **A centre's coverage decides the study's.** Each centre tracks the basins it forecasts for, so the choice of provider is also a choice of basin: `rksl` reaches the Western North Pacific only. No centre's archive reaches before about 2006, which bounds the study whatever the dataset covers.
 
 ---
 
@@ -261,6 +270,41 @@ other than the default writes to its own folder, so two definitions never mix.
 A run can be named with `--run-name`, which keeps it apart from an earlier one,
 and `--recompute` replaces existing per-fold predictions rather than resuming.
 
+### 6. Historical Forecast Study (optional)
+
+What the model would have said *before* each storm arrived, rather than from the
+track as later reconstructed.
+
+```bash
+# 1. Download what the archive holds for the evaluated events
+python main.py --collect-forecasts --forecast-provider rksl
+
+# 2. Predict impact from every ensemble member of every pre-arrival cycle
+python main.py --run-forecast-study --forecast-provider rksl
+
+# Follow each member's track further ahead of its own issuance (default 120 h)
+python main.py --run-forecast-study --forecast-lead-hours 72
+```
+
+Each archived cycle is run through the model as though it were the present: the
+ensemble's forecast wind fields replace the observed one over the same grid
+cells, the storm is withheld from training as in any other fold, and the
+prediction is dated by how long before the storm's arrival the cycle was issued.
+
+**Only the wind is forecast.** Exposure and terrain do not depend on it, but
+rainfall does, and a forecast rainfall field would have to come from the
+ensemble's gridded output, which this study does not use — so the observed
+rainfall stands in. Predictions are therefore better informed about rain than a
+forecaster would have been, and wind is the only quantity whose uncertainty is
+represented. Lead time is measured from the **observed** best-track landfall,
+or from the closest approach where the storm never crosses the coast.
+
+Collection and prediction are both resumable, and an event reaches its final
+filename only once it is whole, so an interrupted run leaves nothing a resume
+would mistake for finished. A large event spans tens of millions of rows, so it
+is predicted and written one cycle at a time; `src/evaluation/forecast_metrics.py`
+reads it back the same way.
+
 ---
 
 ## Feature Dictionary
@@ -276,7 +320,7 @@ The pipeline engineers the following features for every 0.1° grid cell:
 | **Geography** | Distance to Coast, Coastline Length, Landslide Risk | GADM, World Bank |
 | **History** | N Events in Last 5 Years | IBTrACS / EM-DAT |
 
-### 6. Figures and Tables
+### 7. Figures and Tables
 
 ```bash
 # Score every model, with cyclone-clustered intervals -> data/output/metrics<suffix>/
@@ -290,6 +334,13 @@ TC_RUN_SUFFIX=_v2 python src/evaluation/model_comparison.py
 # Then the notebooks, which only read what those wrote
 TC_RUN_SUFFIX=_v2 jupyter lab visualization/
 ```
+
+The forecast study is the one exception to "the notebooks only read": its
+hundreds of millions of grid predictions are reduced to one row per (ADM1 unit,
+forecast cycle) the first time `visualization/forecast_study.ipynb` runs, and
+cached beside the predictions as `adm1_by_cycle.parquet`. Delete that file to
+rebuild it. The reduction itself lives in `src/evaluation/forecast_metrics.py`,
+not in the notebook.
 
 The notebooks in `visualization/` produce the figures; `visualization/README.md`
 says which notebook makes what. A run is selected with `TC_RUN_SUFFIX`, and its
@@ -321,6 +372,29 @@ resampling whole cyclones.
 ### 3. Statistical Baseline
 A two-part generalized linear model with the same structure: logistic regression for whether a cell is affected, then fractional logistic regression (Papke and Wooldridge, 1996) for the affected fraction, zero wherever the first part does not flag the cell. Heavy-tailed predictors enter as `log1p`, and missing values are imputed and predictors standardised inside each fold. Since only the learning algorithm differs, its comparison with the XGBoost model separates the algorithm's contribution from that of the predictors; `model_comparison.py` gives the paired interval of the difference.
 
-### 4. Model Interpretability
+### 4. Historical Forecast Study
+Skill is also read against how early it could have been had. Archived TIGGE
+ensemble tracks are parsed from CXML, matched to the storm by name, and turned
+into one wind field per ensemble member on the model's own 0.1° grid with the
+same CLIMADA configuration the historical features use — so a forecast wind and
+an observed wind reaching the model mean the same thing. Every member of every
+pre-arrival cycle is predicted, and the results are scored at ADM1 level in bins
+of lead time, against both impact thresholds and against the windspeed-exposed
+baseline evaluated on the same forecasts.
+
+The ensemble is summarised in a fixed order of operations, which differs between
+the two quantities deliberately. The **central estimate** takes the median
+across members at grid level and aggregates that field to ADM1. The **band**
+aggregates each member to ADM1 first and takes the quartiles across members,
+because a sum of per-cell quantiles is not a quantile of the sum: summing each
+cell's lower quartile describes a field no member forecast, and understates a
+unit's total whenever members place their impact in different cells.
+
+A lead bin is left unscored where too little supports it (`MIN_EVENTS`,
+`MIN_POSITIVES`). The archive thins with lead time, and in the longest bins
+precision reaches 1.0 on a handful of calls while recall falls to 0 because
+nothing was called at all — both read as skill on a figure, and neither is.
+
+### 5. Model Interpretability
 Interpretability is provided via **SHAP (SHapley Additive exPlanations)**. This allows the model to move beyond "black box" predictions, quantifying how individual hazards (e.g., wind speed) interact with local vulnerability (e.g., SHDI) to drive the final affected population counts.
 

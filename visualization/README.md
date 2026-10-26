@@ -9,6 +9,8 @@ figure and the same number in a table come from one computation.
 | `metrics_overview.ipynb` | confusion matrices, error violins, strategy and variant comparisons, walk-forward over time |
 | `case_studies.ipynb` | the case-study maps: reported impact beside each model's prediction, with the storm track |
 | `shap_summary.ipynb` | SHAP beeswarm summaries, one per stage |
+| `high_impact_threshold.ipynb` | how the scores move as the high-impact cut is swept, and how many units each cut leaves |
+| `forecast_study.ipynb` | the historical forecast study: one storm's ensemble cycle by cycle, and precision and recall against time to landfall |
 
 `lib.py` holds what the notebooks share — loading a run's output, the impact
 bands and their colours, and the plots themselves. It is a module rather than
