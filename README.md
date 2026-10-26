@@ -220,6 +220,35 @@ python src/models/glm_search.py --dry-run
 
 `src/models/glm_search.py` gives it its own tuning under the XGBoost protocol, so that neither model is compared at a configuration chosen for the other. The search pool and held-out cyclones are read from `data/model_hyperparameters.json`, the folds are rebuilt with the same splitter and seed, candidates are scored with the same ADM1 function and selected on the same objective (`f1_high`), and the winner is scored once on the held-out set. Searched: the two regularisation strengths and the stage-1 cutoff. The XGBoost cutoff is not carried over; the GLM picks its own from the same set of cutoffs the XGBoost search scored (`--wide-thresholds` sweeps 0.01 to 0.99, but on `f1_high` alone a very low cutoff can win by a hair by gating nearly every cell, so check the stored curve before preferring one). The ratios stay at the XGBoost model's values unless `--tune-ratios` is given. The JSON also records the XGBoost model's scores on the same pool and held-out set, for a first comparison. Override its location with `TC_IMPACT_GLM_HYPERPARAMETERS`.
 
+The whole comparison, end to end, once the XGBoost search and run exist:
+
+```bash
+# 1. Tune the GLM on the XGBoost search's own cyclones, folds and objective
+python src/models/glm_search.py
+
+# 2. Fit it through the same LOOCV folds, named for the run it is compared with
+TC_RUN_SUFFIX=_v2 python main.py --run-models --models 2-stage-GLM --run-name v2
+
+# 3. Rescore every model, the GLM now among them
+TC_RUN_SUFFIX=_v2 python src/evaluation/paper_metrics.py
+
+# 4. The paired interval of the difference between the two
+TC_RUN_SUFFIX=_v2 python src/evaluation/model_comparison.py \
+    --a 2-stage-XGBoost_global_adm1 --b 2-stage-GLM_global_adm1
+```
+
+> **`--run-name` and `TC_RUN_SUFFIX` have to agree.** `paper_metrics` appends
+> the suffix to *every* `2-stage-` folder, the GLM's included. A GLM run left
+> unnamed is therefore not found under `_v2`, and the comparison quietly falls
+> back to whichever XGBoost output carries no suffix — a different run from the
+> one being reported. Name the GLM run after the run it is compared against.
+
+Step 4 is the one that answers whether the two differ. Each model's own interval
+in the table does not: both are scored on the same storms, so their errors are
+correlated and the difference is far better determined than either score. The
+paired bootstrap resamples cyclones once per replicate and scores both models on
+the same resampled set, so `ci_low`/`ci_high` bracket the difference itself.
+
 ### 4. Validation Metrics with Confidence Intervals
 ```bash
 # Point estimates only (as before)
