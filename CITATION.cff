@@ -25,7 +25,7 @@ authors:
     orcid: "https://orcid.org/0000-0001-8068-5916"
 preferred-citation:
   type: article
-  title: "Global Sub-national Impact-based Forecasting for Tropical Cyclones Using Open Data: Combining Machine Learning and Exposure-based Approaches"
+  title: "Global Sub-national Impact-based Forecasting for Tropical Cyclones Using Open Data: A Retrospective Benchmark of Machine Learning and Exposure-based Approaches"
   journal: "EGUsphere"
   year: 2026
   doi: "10.5194/egusphere-2026-1996"

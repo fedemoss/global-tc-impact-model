@@ -9,7 +9,7 @@ The core of this project is the **Data Factory**, which automates the collection
 ## Citation
 
 If you use this repository or the generated dataset in your research, please cite:
-> *Moss, F et al. Global Sub-national Impact-based Forecasting for Tropical Cyclones Using Open Data: Combining Machine Learning and Exposure-based Approaches, EGUsphere (2026). doi: 10.5194/egusphere-2026-1996 (under review).*
+> *Moss, F et al. Global Sub-national Impact-based Forecasting for Tropical Cyclones Using Open Data: A Retrospective Benchmark of Machine Learning and Exposure-based Approaches, EGUsphere (2026). doi: 10.5194/egusphere-2026-1996 (under review).*
 
 ---
 
