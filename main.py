@@ -26,7 +26,8 @@ from src.static_features.process_gadm import process_gadm_adm2
 from src.dynamic_features.process_emdat import process_emdat_events
 from src.dynamic_features.process_wind_features import generate_all_wind_features
 from src.dynamic_features.process_rain_features import generate_all_rain_features
-from src.dynamic_features.process_historical_features import generate_all_historical_features
+from src.dynamic_features.process_historical_features import (DEFAULT_LEVEL, LEVELS,
+                                                              generate_all_historical_features)
 
 # Build & Model
 from src.dataset_builder import compile_global_dataset
@@ -161,6 +162,14 @@ def main():
                               "per storm. 'daily' uses one granule per date and converts its "
                               "rate to mm/day: 2.4 mm/day resolution, ~1 MB per date, and "
                               "dates are shared between storms."))
+    parser.add_argument("--historical-level", type=str, default=DEFAULT_LEVEL,
+                        choices=list(LEVELS),
+                        help=("What N_events_5_years counts a past cyclone against. "
+                              "'grid' (default) counts, per cell, the past events "
+                              "whose reported impacting area covered it, so the "
+                              "feature varies within a country. 'country' counts "
+                              "them anywhere in the country and gives that number "
+                              "to every cell."))
 
     args = parser.parse_args()
 
@@ -206,7 +215,7 @@ def main():
             # Process hazards
             generate_all_wind_features()
             generate_all_rain_features(product=args.imerg_product)
-            generate_all_historical_features()
+            generate_all_historical_features(level=args.historical_level)
 
         if not args.stage or args.stage == "build":
             logging.info("Stage 5: Compiling Final Training Dataset...")
